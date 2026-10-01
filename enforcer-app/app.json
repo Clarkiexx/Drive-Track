@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "DriveTrack Enforcer",
+    "slug": "drivetrack-enforcer-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#1B5E20"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "DriveTrack needs your location to record where a citation was issued.",
+        "NSCameraUsageDescription": "DriveTrack needs camera access to capture photo evidence for citations.",
+        "NSPhotoLibraryUsageDescription": "DriveTrack needs photo library access to attach evidence photos."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1B5E20"
+      },
+      "permissions": ["ACCESS_FINE_LOCATION", "CAMERA", "READ_MEDIA_IMAGES"]
+    }
+  }
+}

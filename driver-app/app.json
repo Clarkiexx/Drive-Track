@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "DriveTrack Driver",
+    "slug": "drivetrack-driver-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#1B5E20"
+    },
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1B5E20"
+      }
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}

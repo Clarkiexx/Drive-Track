@@ -9,7 +9,10 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
+    // Derive the stored extension from the validated mimetype — never from
+    // the client-supplied original filename (which can spoof .svg/.html).
+    const extByMime = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+    cb(null, `${uniqueSuffix}${extByMime[file.mimetype] || '.jpg'}`);
   },
 });
 

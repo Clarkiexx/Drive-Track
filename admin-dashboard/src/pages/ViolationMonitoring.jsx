@@ -188,6 +188,22 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
   const [errorMessage, setErrorMessage] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [enlargedPhoto, setEnlargedPhoto] = useState(null);
+  const [isActing, setIsActing] = useState(false);
+  const [actionError, setActionError] = useState('');
+
+  async function runAction(fn) {
+    if (isActing) return;
+    setIsActing(true);
+    setActionError('');
+    try {
+      await fn();
+      onChanged();
+    } catch (err) {
+      setActionError(err.response?.data?.message || 'Action failed. Please try again.');
+    } finally {
+      setIsActing(false);
+    }
+  }
 
   function load() {
     setIsLoading(true);
@@ -203,20 +219,17 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
   }, [citationId]);
 
   async function handleVerify() {
-    await verifyCitation(citationId);
-    onChanged();
+    await runAction(() => verifyCitation(citationId));
   }
 
   async function handleSettle() {
     if (!window.confirm('Mark this citation as settled? Use this once the fine has actually been paid (e.g. the driver settled it in person).')) return;
-    await settleCitation(citationId);
-    onChanged();
+    await runAction(() => settleCitation(citationId));
   }
 
   async function handleCancel() {
     if (!window.confirm('Cancel this citation? This should only be done if it was issued in error.')) return;
-    await cancelCitation(citationId);
-    onChanged();
+    await runAction(() => cancelCitation(citationId));
   }
 
   async function handleProtest(action) {
@@ -224,8 +237,7 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
       ? 'Dismiss this protest? The citation will stand and the protest flag will be cleared.'
       : 'Uphold this protest? The citation will be cancelled in the driver\'s favor.';
     if (!window.confirm(msg)) return;
-    await resolveProtest(citationId, action);
-    onChanged();
+    await runAction(() => resolveProtest(citationId, action));
   }
 
   if (isLoading) {
@@ -319,23 +331,24 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
       </div>
 
       <div className="modal-footer" style={{ marginTop: 20 }}>
+        {actionError ? <div className="error-text" style={{ width: '100%' }}>{actionError}</div> : null}
         {citation.driverUnderProtest && (
           <>
-            <button className="btn btn-secondary" onClick={() => handleProtest('dismiss')}>Dismiss Protest</button>
-            <button className="btn btn-primary" onClick={() => handleProtest('uphold')}>Uphold Protest (Cancel)</button>
+            <button className="btn btn-secondary" onClick={() => handleProtest('dismiss')} disabled={isActing}>Dismiss Protest</button>
+            <button className="btn btn-primary" onClick={() => handleProtest('uphold')} disabled={isActing}>Uphold Protest (Cancel)</button>
           </>
         )}
         {citation.settlementStatus === 'pending' && (
-          <button className="btn btn-danger" onClick={handleCancel}>Cancel Citation</button>
+          <button className="btn btn-danger" onClick={handleCancel} disabled={isActing}>Cancel Citation</button>
         )}
         {citation.settlementStatus === 'pending' && citation.recordType === 'citation' && (
-          <button className="btn btn-secondary" onClick={() => setShowOverride(true)}>Override Fine</button>
+          <button className="btn btn-secondary" onClick={() => setShowOverride(true)} disabled={isActing}>Override Fine</button>
         )}
         {citation.settlementStatus === 'pending' && citation.recordType === 'citation' && (
-          <button className="btn btn-primary" onClick={handleSettle}>✓ Mark as Settled</button>
+          <button className="btn btn-primary" onClick={handleSettle} disabled={isActing}>{isActing ? 'Working…' : '✓ Mark as Settled'}</button>
         )}
         {!citation.verified && (
-          <button className="btn btn-primary" onClick={handleVerify}>Mark as Verified</button>
+          <button className="btn btn-primary" onClick={handleVerify} disabled={isActing}>{isActing ? 'Working…' : 'Mark as Verified'}</button>
         )}
       </div>
       {citation.recordType === 'warning' && (

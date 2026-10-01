@@ -15,6 +15,7 @@ const { generateCitationNumber } = require('../utils/citationNumber');
 const { notifyDriver } = require('../services/notificationService');
 const { logAdminAction } = require('../services/auditLogService');
 const { success, fail } = require('../utils/response');
+const { getPagination } = require('../utils/pagination');
 
 const DUE_DAYS = parseInt(process.env.CITATION_DUE_DAYS, 10) || 15;
 
@@ -83,6 +84,16 @@ async function createCitation(req, res, next) {
       address,
     } = req.body;
 
+    // Only ACTIVE enforcers may issue citations/warnings. Login-time checks
+    // are not enough (a JWT stays valid up to 8h), so the status is
+    // re-checked here on every submission — never rely on frontend hiding.
+    const issuer = await Enforcer.findByPk(req.user.id, { transaction: t });
+    if (!issuer || issuer.status !== 'active') {
+      await t.rollback();
+      cleanupUploadedFiles(req.files);
+      return fail(res, 'Only active enforcers may issue citations or warnings.', 403);
+    }
+
     // 'violation' is a reserved record_type with no creation flow in Phase 1 —
     // only 'citation' and 'warning' can be issued.
     if (recordType && !['citation', 'warning'].includes(recordType)) {
@@ -150,33 +161,37 @@ async function createCitation(req, res, next) {
       recordType: isWarning ? 'warning' : 'citation',
       driverId: driver.driverId,
       enforcerId: req.user.id,
-      vehicleUnitType: vehicleUnitType || null,
-      plateNumber: plateNumber || null,
-      registeredOwner: registeredOwner || null,
+      vehicleUnitType: String(vehicleUnitType).trim(),
+      plateNumber: String(plateNumber).trim(),
+      registeredOwner: String(registeredOwner).trim(),
       otherViolation: otherViolation || null,
       placeOfViolation,
       occurredAt,
-      latitude: latitude || null,
-      longitude: longitude || null,
+      latitude: Number(latitude),
+      longitude: Number(longitude),
       driverUnderProtest: driverUnderProtest === 'true' || driverUnderProtest === true,
       fineAmount,
       dueDate,
       settlementStatus: isWarning ? 'warning_only' : 'pending',
     });
 
-    // Retry once on a citation-number collision (two enforcers submitting at
-    // the same second can generate the same count-based number). MySQL does
-    // not abort the surrounding transaction on a single-statement unique
-    // error, so regenerating the number and retrying inside the same tx is
-    // safe. Keeps the simple count-based scheme — no counter table.
+    // Retry on citation-number collisions (two enforcers submitting at the
+    // same second can generate the same count-based number). MySQL does not
+    // abort the surrounding transaction on a single-statement unique error,
+    // so regenerating the number and retrying inside the same tx is safe.
+    // Up to 3 attempts before surfacing the error — no counter table.
     let citation;
-    try {
-      citation = await Citation.create(citationPayload(), { transaction: t });
-    } catch (createErr) {
-      if (createErr.name === 'SequelizeUniqueConstraintError') {
-        citationNumber = await generateCitationNumber(isWarning ? 'warning' : 'citation');
+    let attempts = 0;
+    for (;;) {
+      try {
+        attempts += 1;
         citation = await Citation.create(citationPayload(), { transaction: t });
-      } else {
+        break;
+      } catch (createErr) {
+        if (createErr.name === 'SequelizeUniqueConstraintError' && attempts < 3) {
+          citationNumber = await generateCitationNumber(isWarning ? 'warning' : 'citation');
+          continue;
+        }
         throw createErr;
       }
     }
@@ -293,8 +308,7 @@ async function getDriverCitations(req, res, next) {
  */
 async function listAllCitations(req, res, next) {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
+    const { page, limit } = getPagination(req.query, 10);
     const { search, status, recordType, underProtest } = req.query;
 
     const where = {};
@@ -343,8 +357,9 @@ async function verifyCitation(req, res, next) {
 async function overrideFineAmount(req, res, next) {
   try {
     const { fineAmount, reason } = req.body;
-    if (fineAmount === undefined || Number(fineAmount) < 0) {
-      return fail(res, 'A valid, non-negative fineAmount is required', 422);
+    const parsedAmount = Number(fineAmount);
+    if (fineAmount === undefined || !Number.isFinite(parsedAmount) || parsedAmount < 0 || parsedAmount > 99999999) {
+      return fail(res, 'A valid fine amount between 0 and 99,999,999 is required', 422);
     }
     if (!reason || !reason.trim()) {
       return fail(res, 'A reason is required when overriding a fine amount', 422);
@@ -382,10 +397,21 @@ async function overrideFineAmount(req, res, next) {
  * fine and are never settled; settled/cancelled records are immutable.
  * Accepts optional { paymentMethod, paymentReference } for the receipt. */
 async function settleCitation(req, res, next) {
+  const t = await sequelize.transaction();
   try {
-    const citation = await Citation.findByPk(req.params.id, { include: citationIncludes });
-    if (!citation) return fail(res, 'Citation not found', 404);
+    // Row lock: two admins settling the same citation concurrently must not
+    // both succeed — the loser gets a 409 when the status is re-checked.
+    const citation = await Citation.findByPk(req.params.id, {
+      include: citationIncludes,
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (!citation) {
+      await t.rollback();
+      return fail(res, 'Citation not found', 404);
+    }
     if (citation.settlementStatus !== 'pending') {
+      await t.rollback();
       if (citation.settlementStatus === 'settled') {
         return fail(res, 'This citation is already settled', 409);
       }
@@ -397,6 +423,7 @@ async function settleCitation(req, res, next) {
 
     const { paymentMethod, paymentReference } = req.body || {};
     if (paymentMethod && !['cash', 'gcash', 'maya', 'bank', 'other'].includes(paymentMethod)) {
+      await t.rollback();
       return fail(res, 'Invalid payment method', 422);
     }
 
@@ -405,18 +432,23 @@ async function settleCitation(req, res, next) {
     if (paymentMethod) citation.paymentMethod = paymentMethod;
     if (paymentReference) citation.paymentReference = String(paymentReference).trim() || null;
     citation.receivedBy = req.user?.id || null;
-    await citation.save();
+    await citation.save({ transaction: t });
 
-    await notifyDriver({
-      driverId: citation.driverId,
-      citationId: citation.citationId,
-      message: `Your payment for citation ${citation.citationNumber} has been processed successfully.`,
-      notificationType: 'settlement_confirmed',
-    });
+    await notifyDriver(
+      {
+        driverId: citation.driverId,
+        citationId: citation.citationId,
+        message: `Your payment for citation ${citation.citationNumber} has been processed successfully.`,
+        notificationType: 'settlement_confirmed',
+      },
+      { transaction: t }
+    );
 
+    await t.commit();
     logAdminAction(req.user.id, 'settled_citation', 'citation', citation.citationId, citation.citationNumber);
     return success(res, citation, 'Citation marked as settled');
   } catch (err) {
+    await t.rollback();
     next(err);
   }
 }
@@ -470,6 +502,17 @@ async function resolveProtest(req, res, next) {
     const citation = await Citation.findByPk(req.params.id);
     if (!citation) return fail(res, 'Citation not found', 404);
     if (!citation.driverUnderProtest) return fail(res, 'This citation is not under protest', 409);
+
+    // Settlement/history integrity: a settled citation represents money
+    // already taken and must never flip to cancelled via protest. Only
+    // pending citations can be upheld (cancelled); dismiss is allowed for
+    // pending or settled records but never for already-cancelled ones.
+    if (action === 'uphold' && citation.settlementStatus !== 'pending') {
+      return fail(res, 'Only unsettled citations can be cancelled through protest. Settled records stay settled.', 409);
+    }
+    if (action === 'dismiss' && citation.settlementStatus === 'cancelled') {
+      return fail(res, 'This citation is already cancelled', 409);
+    }
 
     if (action === 'dismiss') {
       citation.driverUnderProtest = false;

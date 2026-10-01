@@ -3,6 +3,7 @@ const { Op, fn, col } = require('sequelize');
 const { validationResult } = require('express-validator');
 const { Driver, Citation } = require('../models');
 const { success, fail } = require('../utils/response');
+const { getPagination } = require('../utils/pagination');
 const { logAdminAction } = require('../services/auditLogService');
 
 const SALT_ROUNDS = 10;
@@ -23,8 +24,7 @@ function handleValidation(req, res) {
  */
 async function listDrivers(req, res, next) {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 8;
+    const { page, limit } = getPagination(req.query, 8);
     const { search, status } = req.query;
 
     const where = {};
@@ -255,19 +255,11 @@ async function updateDriverStatus(req, res, next) {
   }
 }
 
-async function deleteDriver(req, res, next) {
-  try {
-    const driver = await Driver.findByPk(req.params.id);
-    if (!driver) return fail(res, 'Driver not found', 404);
-
-    const driverLabel = `${driver.firstName} ${driver.lastName} (${driver.licenseNumber})`;
-    await driver.destroy();
-
-    logAdminAction(req.user.id, 'deleted_driver', 'driver', req.params.id, driverLabel);
-    return success(res, null, 'Driver deleted');
-  } catch (err) {
-    next(err);
-  }
+/** DELETE /drivers/:id — permanently disabled.
+ *  Historical enforcement records must be retained: use PATCH /:id/status
+ *  (revoked/suspended) instead of deleting a driver. */
+async function deleteDriver(req, res) {
+  return fail(res, 'Drivers cannot be deleted. Historical records are retained — change the driver status instead.', 405);
 }
 
 /**

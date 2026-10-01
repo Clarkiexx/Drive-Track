@@ -3,6 +3,7 @@ const { Op, fn, col } = require('sequelize');
 const { validationResult } = require('express-validator');
 const { Enforcer, Citation } = require('../models');
 const { success, fail } = require('../utils/response');
+const { getPagination } = require('../utils/pagination');
 const { logAdminAction } = require('../services/auditLogService');
 
 const SALT_ROUNDS = 10;
@@ -19,8 +20,7 @@ function handleValidation(req, res) {
 /** GET /enforcers?search=&page=&limit= */
 async function listEnforcers(req, res, next) {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
+    const { page, limit } = getPagination(req.query, 10);
     const { search, includeArchived } = req.query;
 
     const where = {};
@@ -212,19 +212,11 @@ async function resetEnforcerPassword(req, res, next) {
   }
 }
 
-async function deleteEnforcer(req, res, next) {
-  try {
-    const enforcer = await Enforcer.findByPk(req.params.id);
-    if (!enforcer) return fail(res, 'Enforcer not found', 404);
-
-    const enforcerLabel = `${enforcer.firstName} ${enforcer.lastName} (${enforcer.employeeId})`;
-    await enforcer.destroy();
-
-    logAdminAction(req.user.id, 'deleted_enforcer', 'enforcer', req.params.id, enforcerLabel);
-    return success(res, null, 'Enforcer deleted');
-  } catch (err) {
-    next(err);
-  }
+/** DELETE /enforcers/:id — permanently disabled.
+ *  Historical enforcement records must be retained: use PATCH /:id/status
+ *  (suspended/archived) instead of deleting an enforcer. */
+async function deleteEnforcer(req, res) {
+  return fail(res, 'Enforcers cannot be deleted. Historical records are retained — change the enforcer status instead.', 405);
 }
 
 module.exports = {

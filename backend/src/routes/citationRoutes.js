@@ -17,6 +17,11 @@ router.post(
     body('driverId').notEmpty().withMessage('Driver is required'),
     body('placeOfViolation').trim().notEmpty().withMessage('Place of violation is required'),
     body('violationTypeIds').notEmpty().withMessage('At least one violation type must be selected'),
+    body('plateNumber').trim().notEmpty().withMessage('Plate number is required'),
+    body('registeredOwner').trim().notEmpty().withMessage('Registered owner is required'),
+    body('vehicleUnitType').trim().notEmpty().withMessage('Vehicle unit type is required'),
+    body('latitude').notEmpty().withMessage('GPS coordinates are required').isFloat({ min: -90, max: 90 }).withMessage('Latitude must be between -90 and 90'),
+    body('longitude').notEmpty().withMessage('GPS coordinates are required').isFloat({ min: -180, max: 180 }).withMessage('Longitude must be between -180 and 180'),
   ],
   citationController.createCitation
 );

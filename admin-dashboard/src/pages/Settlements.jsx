@@ -19,6 +19,7 @@ export default function Settlements() {
   const [totalUnsettledAmount, setTotalUnsettledAmount] = useState(0);
   const [payingCitation, setPayingCitation] = useState(null);
   const [receiptCitation, setReceiptCitation] = useState(null);
+  const [remindingId, setRemindingId] = useState(null);
 
   function loadUnsettledTotal() {
     fetchDashboardSummary()
@@ -97,11 +98,15 @@ export default function Settlements() {
   }
 
   async function handleRemind(citation) {
+    if (remindingId) return;
+    setRemindingId(citation.citationId);
     try {
       await sendReminder(citation.citationId);
       window.alert(`Reminder sent to ${citation.Driver?.firstName} ${citation.Driver?.lastName}.`);
     } catch (err) {
       window.alert(err.response?.data?.message || 'Unable to send reminder.');
+    } finally {
+      setRemindingId(null);
     }
   }
 
@@ -191,6 +196,8 @@ export default function Settlements() {
                         <span className="status-pill status-active">Settled</span>
                       ) : overdue ? (
                         <span className="status-pill status-suspended">Overdue ({Math.abs(remaining)}d)</span>
+                      ) : remaining === null ? (
+                        <span className="status-pill status-pending">No due date</span>
                       ) : (
                         <span className="status-pill status-pending">{remaining} days left</span>
                       )}
@@ -199,7 +206,7 @@ export default function Settlements() {
                       {c.settlementStatus === 'pending' && (
                         <>
                           <button className="btn btn-primary" onClick={() => handleMarkPaid(c)}>Mark Paid</button>
-                          <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={() => handleRemind(c)}>Remind</button>
+                          <button className="btn btn-secondary" style={{ marginLeft: 8 }} onClick={() => handleRemind(c)} disabled={remindingId === c.citationId}>{remindingId === c.citationId ? 'Sending…' : 'Remind'}</button>
                         </>
                       )}
                       {c.settlementStatus === 'settled' && (

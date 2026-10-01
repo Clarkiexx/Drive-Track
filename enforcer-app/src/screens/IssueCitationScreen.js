@@ -135,6 +135,20 @@ export default function IssueCitationScreen({ navigation, route }) {
         return false;
       }
     }
+    if (step === 2) {
+      if (!plateNumber.trim()) {
+        setStepError('Plate number is required.');
+        return false;
+      }
+      if (!registeredOwner.trim()) {
+        setStepError('Registered owner is required.');
+        return false;
+      }
+      if (!vehicleUnitType.trim()) {
+        setStepError('Vehicle unit type is required.');
+        return false;
+      }
+    }
     if (step === 3) {
       if (selectedViolationIds.length === 0) {
         setStepError('Select at least one violation.');
@@ -146,6 +160,10 @@ export default function IssueCitationScreen({ navigation, route }) {
       }
     }
     if (step === 4) {
+      if (!location) {
+        setStepError(locationError || 'GPS coordinates are required. Wait for location capture or tap Retry.');
+        return false;
+      }
       if (driverUnderProtest === null) {
         setStepError('Please indicate whether the driver is under protest.');
         return false;
@@ -346,10 +364,10 @@ function StepVehicleInfo({
   return (
     <View>
       <Text style={styles.stepTitle}>Vehicle Information</Text>
-      <Text style={styles.label}>Unit Type</Text>
+      <Text style={styles.label}>Unit Type<Text style={styles.required}> *</Text></Text>
       <TextInput style={styles.input} placeholder="e.g., Sedan, Motorcycle" value={unitType} onChangeText={onUnitTypeChange} />
 
-      <Text style={styles.label}>Plate Number</Text>
+      <Text style={styles.label}>Plate Number<Text style={styles.required}> *</Text></Text>
       <TextInput
         style={styles.input}
         placeholder="e.g., ABC 1234"
@@ -359,7 +377,7 @@ function StepVehicleInfo({
         autoCapitalize="characters"
       />
 
-      <Text style={styles.label}>Registered Owner</Text>
+      <Text style={styles.label}>Registered Owner<Text style={styles.required}> *</Text></Text>
       <TextInput
         style={styles.input}
         placeholder="e.g., Maria Santos"
@@ -489,7 +507,7 @@ function StepDocumentation({
       <Text style={styles.stepTitle}>Documentation</Text>
 
       <View style={styles.gpsBox}>
-        <Text style={styles.gpsLabel}>📍 GPS Coordinates</Text>
+        <Text style={styles.gpsLabel}>📍 GPS Coordinates<Text style={styles.required}> *</Text></Text>
         {location ? (
           <>
             <Text style={styles.gpsValue}>
@@ -505,7 +523,10 @@ function StepDocumentation({
             </TouchableOpacity>
           </>
         ) : (
-          <ActivityIndicator color={colors.primary} />
+          <>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={styles.gpsSubtext}>Capturing location… wait before submitting.</Text>
+          </>
         )}
       </View>
 

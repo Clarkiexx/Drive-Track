@@ -1,5 +1,6 @@
 const { AuditLog, Admin } = require('../models');
 const { success } = require('../utils/response');
+const { getPagination } = require('../utils/pagination');
 
 /**
  * GET /audit-logs?page=&limit=
@@ -8,8 +9,7 @@ const { success } = require('../utils/response');
  */
 async function listAuditLogs(req, res, next) {
   try {
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 25;
+    const { page, limit } = getPagination(req.query, 25);
 
     const { rows, count } = await AuditLog.findAndCountAll({
       include: [{ model: Admin, attributes: ['firstName', 'lastName', 'username'] }],

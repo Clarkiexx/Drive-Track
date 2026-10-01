@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
 import Modal from '../components/Modal';
 import { fetchDrivers, createDriver, updateDriver, updateDriverStatus, fetchDriverCitations } from '../api/driverApi';
-import { getMediaUrl } from '../api/media';
+import { fetchProtectedImageUrl } from '../api/media';
+import { useAuth } from '../context/AuthContext';
 
 const STATUS_LABELS = {
   verified: 'Verified',
@@ -693,9 +694,39 @@ function EditDriverModal({ driver, onClose, onSaved }) {
 }
 
 function DriverDetailModal({ driver, onClose }) {
+  const { token } = useAuth();
   const [citations, setCitations] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const [licensePhotoUrl, setLicensePhotoUrl] = useState('');
+  const [licensePhotoError, setLicensePhotoError] = useState('');
+
+  useEffect(() => {
+    if (!driver.licensePhotoPath) return;
+    let objectUrl = '';
+    let cancelled = false;
+    setLicensePhotoUrl('');
+    setLicensePhotoError('');
+    // License photos are served only to authenticated admins — fetch with
+    // the JWT (in the header, never in the URL) and render a blob URL,
+    // since a plain <img> cannot attach an Authorization header.
+    fetchProtectedImageUrl(driver.licensePhotoPath, token)
+      .then((url) => {
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        objectUrl = url;
+        setLicensePhotoUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setLicensePhotoError('Unable to load license photo.');
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [driver.licensePhotoPath, token]);
 
   useEffect(() => {
     fetchDriverCitations(driver.driverId)
@@ -733,18 +764,26 @@ function DriverDetailModal({ driver, onClose }) {
         )}
       </div>
 
-      {driver.licensePhotoPath && (
+      {driver.licensePhotoPath ? (
         <div style={{ marginBottom: 16 }}>
           <h4 style={{ marginBottom: 8 }}>License Photo</h4>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 0, marginBottom: 8 }}>
             Captured by the enforcer at the time this record was created — use this to confirm the details above before verifying.
           </p>
-          <img
-            src={getMediaUrl(driver.licensePhotoPath)}
-            alt="Driver's license"
-            style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, border: '1px solid var(--border)' }}
-          />
+          {licensePhotoError ? (
+            <p className="error-text">{licensePhotoError}</p>
+          ) : licensePhotoUrl ? (
+            <img
+              src={licensePhotoUrl}
+              alt="Driver's license"
+              style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, border: '1px solid var(--border)' }}
+            />
+          ) : (
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Loading license photo…</p>
+          )}
         </div>
+      ) : (
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16 }}>No license photo on file.</p>
       )}
 
       <h4 style={{ marginBottom: 8 }}>Violation History ({citations.length})</h4>

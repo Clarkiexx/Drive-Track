@@ -1,12 +1,28 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
 import Modal from '../components/Modal';
+import { toastSuccess, toastError } from '../components/Toast';
 import { fetchCitations, settleCitation, sendReminder } from '../api/citationApi';
 import { fetchDashboardSummary } from '../api/dashboardApi';
 
 function daysUntil(dueDate) {
-  const diff = Math.ceil((new Date(dueDate) - new Date()) / (1000 * 60 * 60 * 24));
-  return diff;
+  if (!dueDate) return null;
+  const target = new Date(dueDate);
+  if (Number.isNaN(target.getTime())) return null;
+  return Math.ceil((target - new Date()) / (1000 * 60 * 60 * 24));
+}
+
+function formatPeso(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return '—';
+  return `₱${amount.toLocaleString()}`;
+}
+
+function formatDueDate(dueDate) {
+  if (!dueDate) return '—';
+  const target = new Date(dueDate);
+  if (Number.isNaN(target.getTime())) return '—';
+  return target.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 export default function Settlements() {
@@ -67,10 +83,17 @@ export default function Settlements() {
   }
 
   async function confirmMarkPaid(method, reference) {
-    await settleCitation(payingCitation.citationId, { paymentMethod: method, paymentReference: reference });
-    setPayingCitation(null);
-    load(pagination.page);
-    loadUnsettledTotal();
+    try {
+      await settleCitation(payingCitation.citationId, { paymentMethod: method, paymentReference: reference });
+      setPayingCitation(null);
+      toastSuccess('Citation marked as settled.');
+      load(pagination.page);
+      loadUnsettledTotal();
+    } catch (err) {
+      const message = err.response?.data?.message || 'Unable to mark as paid.';
+      toastError(message);
+      throw err;
+    }
   }
 
   function handleExportCsv() {
@@ -92,7 +115,7 @@ export default function Settlements() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `settlements-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `settlements-${tab}-p${pagination.page}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -102,9 +125,9 @@ export default function Settlements() {
     setRemindingId(citation.citationId);
     try {
       await sendReminder(citation.citationId);
-      window.alert(`Reminder sent to ${citation.Driver?.firstName} ${citation.Driver?.lastName}.`);
+      toastSuccess(`Reminder sent to ${citation.Driver?.firstName} ${citation.Driver?.lastName}.`);
     } catch (err) {
-      window.alert(err.response?.data?.message || 'Unable to send reminder.');
+      toastError(err.response?.data?.message || 'Unable to send reminder.');
     } finally {
       setRemindingId(null);
     }
@@ -159,7 +182,7 @@ export default function Settlements() {
               style={{ width: '100%' }}
             />
           </form>
-          <button className="btn btn-secondary" onClick={handleExportCsv}>⬇ Export CSV</button>
+          <button className="btn btn-secondary" onClick={handleExportCsv} title="Exports only the rows shown on this page">⬇ Export this page (CSV)</button>
         </div>
 
         {isLoading ? (
@@ -182,14 +205,14 @@ export default function Settlements() {
             </thead>
             <tbody>
               {citations.map((c) => {
-                const remaining = c.dueDate ? daysUntil(c.dueDate) : null;
+                const remaining = daysUntil(c.dueDate);
                 const overdue = c.settlementStatus === 'pending' && remaining !== null && remaining < 0;
                 return (
                   <tr key={c.citationId}>
                     <td style={{ fontWeight: 600 }}>{c.citationNumber}</td>
                     <td>{c.Driver?.firstName} {c.Driver?.lastName}</td>
-                    <td style={{ fontWeight: 600 }}>₱{Number(c.fineAmount).toLocaleString()}</td>
-                    <td>{c.dueDate ? new Date(c.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
+                    <td style={{ fontWeight: 600 }}>{formatPeso(c.fineAmount)}</td>
+                    <td>{formatDueDate(c.dueDate)}</td>
                     <td style={{ fontSize: 12 }}>{c.settlementStatus === 'settled' ? `${c.paymentMethod || 'cash'}${c.paymentReference ? ` • ${c.paymentReference}` : ''}` : '—'}</td>
                     <td>
                       {c.settlementStatus === 'settled' ? (
@@ -242,11 +265,11 @@ export default function Settlements() {
         <Modal title={`Receipt — ${receiptCitation.citationNumber}`} onClose={() => setReceiptCitation(null)}>
           <div style={{ fontSize: 14 }}>
             <p><strong>Driver:</strong> {receiptCitation.Driver?.firstName} {receiptCitation.Driver?.lastName} ({receiptCitation.Driver?.licenseNumber})</p>
-            <p><strong>Amount:</strong> ₱{Number(receiptCitation.fineAmount).toLocaleString()}</p>
+            <p><strong>Amount:</strong> {formatPeso(receiptCitation.fineAmount)}</p>
             <p><strong>Method:</strong> {receiptCitation.paymentMethod || 'cash'}</p>
             {receiptCitation.paymentReference && <p><strong>Reference:</strong> {receiptCitation.paymentReference}</p>}
             <p><strong>Settled:</strong> {receiptCitation.settledAt ? new Date(receiptCitation.settledAt).toLocaleString() : '—'}</p>
-            <p><strong>Due was:</strong> {receiptCitation.dueDate || '—'}</p>
+            <p><strong>Due was:</strong> {formatDueDate(receiptCitation.dueDate)}</p>
           </div>
           <div className="modal-footer">
             <button className="btn btn-primary" onClick={() => setReceiptCitation(null)}>Close</button>
@@ -278,7 +301,7 @@ function MarkPaidModal({ citation, onClose, onConfirm }) {
   return (
     <Modal title={`Mark Paid — ${citation.citationNumber}`} onClose={onClose}>
       <form onSubmit={handleSubmit}>
-        <p style={{ fontSize: 13 }}>Amount: <strong>₱{Number(citation.fineAmount).toLocaleString()}</strong></p>
+        <p style={{ fontSize: 13 }}>Amount: <strong>{formatPeso(citation.fineAmount)}</strong></p>
         <div className="form-group">
           <label>Payment Method</label>
           <select value={method} onChange={(e) => setMethod(e.target.value)}>

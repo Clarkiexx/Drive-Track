@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import DashboardLayout from '../components/DashboardLayout';
 import { fetchDashboardSummary, fetchDashboardTrend, fetchRecentActivity } from '../api/dashboardApi';
+import { fetchCitations } from '../api/citationApi';
+import { fetchDrivers } from '../api/driverApi';
 
 function timeAgo(dateString) {
   const diffMs = Date.now() - new Date(dateString).getTime();
@@ -17,6 +20,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState(null);
   const [trend, setTrend] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [pending, setPending] = useState({ unverified: 0, protest: 0, pendingDrivers: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -29,6 +33,18 @@ export default function Dashboard() {
       })
       .catch((err) => setLoadError(err.response?.data?.message || 'Unable to load dashboard data.'))
       .finally(() => setIsLoading(false));
+    // Pending-action counts reuse existing list APIs (limit 1, read total only).
+    Promise.all([
+      fetchCitations({ status: 'pending', page: 1, limit: 1 }).catch(() => null),
+      fetchCitations({ underProtest: 'true', page: 1, limit: 1 }).catch(() => null),
+      fetchDrivers({ status: 'pending', page: 1, limit: 1 }).catch(() => null),
+    ]).then(([unsettledRes, protestRes, driversRes]) => {
+      setPending({
+        unverified: unsettledRes?.data?.data?.pagination?.total || 0,
+        protest: protestRes?.data?.data?.pagination?.total || 0,
+        pendingDrivers: driversRes?.data?.data?.pagination?.total || 0,
+      });
+    }).catch(() => {});
   }, []);
 
   const maxTrendValue = Math.max(1, ...trend.map((d) => d.settled + d.unsettled));
@@ -49,6 +65,18 @@ export default function Dashboard() {
             <StatCard icon="🛡️" value={summary.totalEnforcers} label="Total Enforcers" bg="#DCFCE7" />
             <StatCard icon="📄" value={summary.totalViolations} label="Total Violations" bg="#F3E8FD" />
             <StatCard icon="⚠️" value={summary.unsettledViolations} label="Unsettled Violations" bg="#FEF3C7" />
+          </div>
+
+          <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+            <h3 style={{ marginTop: 0, fontSize: 15 }}>Pending Actions</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+              <PendingAction label="Unsettled citations" value={summary.unsettledViolations} to="/settlements" />
+              <PendingAction label="Under protest" value={pending.protest} to="/violations" />
+              <PendingAction label="Pending drivers" value={pending.pendingDrivers} to="/drivers" />
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 0 }}>
+              Counts reuse existing list APIs — no new data sources.
+            </p>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
@@ -86,6 +114,17 @@ function StatCard({ icon, value, label, bg }) {
       <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{label}</div>
     </div>
+  );
+}
+
+function PendingAction({ label, value, to }) {
+  return (
+    <Link to={to} style={{ textDecoration: 'none', color: 'inherit' }}>
+      <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '12px 14px' }}>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{label}</div>
+      </div>
+    </Link>
   );
 }
 

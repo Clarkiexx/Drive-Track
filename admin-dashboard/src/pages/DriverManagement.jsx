@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
-import Modal from '../components/Modal';
+import Modal, { ConfirmModal } from '../components/Modal';
+import { toastSuccess, toastError } from '../components/Toast';
 import { fetchDrivers, createDriver, updateDriver, updateDriverStatus, fetchDriverCitations } from '../api/driverApi';
 import { fetchProtectedImageUrl } from '../api/media';
 import { useAuth } from '../context/AuthContext';
@@ -29,6 +30,27 @@ export default function DriverManagement() {
   const [editingDriver, setEditingDriver] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [isBulkActing, setIsBulkActing] = useState(false);
+  const [statusConfirm, setStatusConfirm] = useState(null); // { driver, mode } mode: verify|flag|flaggedChoice|reinstate
+  const [statusReason, setStatusReason] = useState('');
+  const [isStatusActing, setIsStatusActing] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState(null); // newStatus
+  const [openMenuId, setOpenMenuId] = useState(null);
+
+  useEffect(() => {
+    if (openMenuId === null) return;
+    function handlePointerDown(e) {
+      if (!e.target.closest?.('.row-actions')) setOpenMenuId(null);
+    }
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') setOpenMenuId(null);
+    }
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openMenuId]);
 
   async function loadDrivers(page = 1, searchValue = search, statusValue = statusFilter) {
     setIsLoading(true);
@@ -65,54 +87,43 @@ export default function DriverManagement() {
    * Status-aware action: pending → verify, verified → flag,
    * flagged → revoke (with reason) or reinstate, revoked/suspended → reinstate.
    * No hard delete — flagged/revoked records stay for transparency.
+   * Confirmation uses in-app modals (no window.confirm/prompt).
    */
-  async function handleStatusAction(driver) {
-    let nextStatus;
-    let confirmMessage;
-
+  function handleStatusAction(driver) {
+    setStatusReason('');
     if (driver.verificationStatus === 'pending') {
-      nextStatus = 'verified';
-      confirmMessage = `Verify ${driver.firstName} ${driver.lastName}? This confirms their license/details are legitimate.`;
+      setStatusConfirm({ driver, mode: 'verify' });
     } else if (driver.verificationStatus === 'verified') {
-      const reason = window.prompt(`Flag ${driver.firstName} ${driver.lastName}? Enter a reason (optional):`, '');
-      if (reason === null) return;
-      await updateDriverStatus(driver.driverId, 'flagged', reason || undefined);
-      loadDrivers(pagination.page);
-      return;
+      setStatusConfirm({ driver, mode: 'flag' });
     } else if (driver.verificationStatus === 'flagged') {
-      const choice = window.confirm(`Revoke ${driver.firstName} ${driver.lastName} permanently?\nOK = Revoke, Cancel = Reinstate to Verified.`);
-      if (choice) {
-        const reason = window.prompt('Revocation reason (optional):', '') || undefined;
-        await updateDriverStatus(driver.driverId, 'revoked', reason);
-      } else {
-        await updateDriverStatus(driver.driverId, 'verified');
-      }
-      loadDrivers(pagination.page);
-      return;
+      setStatusConfirm({ driver, mode: 'flaggedChoice' });
     } else {
-      nextStatus = 'verified';
-      confirmMessage = `Reinstate ${driver.firstName} ${driver.lastName} to Verified?`;
+      setStatusConfirm({ driver, mode: 'reinstate' });
     }
-
-    const confirmed = window.confirm(confirmMessage);
-    if (!confirmed) return;
-
-    await updateDriverStatus(driver.driverId, nextStatus);
-    loadDrivers(pagination.page);
   }
 
-  function actionIconFor(status) {
-    if (status === 'pending') return '✔️';
-    if (status === 'verified') return '🚩';
-    if (status === 'flagged') return '⛔';
-    return '✅';
+  async function confirmStatusAction(nextStatus, reason) {
+    const driver = statusConfirm?.driver;
+    if (!driver) return;
+    setIsStatusActing(true);
+    try {
+      await updateDriverStatus(driver.driverId, nextStatus, reason || undefined);
+      toastSuccess(`Driver ${nextStatus}.`);
+      setStatusConfirm(null);
+      setStatusReason('');
+      await loadDrivers(pagination.page);
+    } catch (err) {
+      toastError(err.response?.data?.message || 'Unable to update driver status.');
+    } finally {
+      setIsStatusActing(false);
+    }
   }
 
   function actionTitleFor(status) {
     if (status === 'pending') return 'Verify';
-    if (status === 'verified') return 'Flag account';
-    if (status === 'flagged') return 'Revoke / Reinstate';
-    return 'Reinstate';
+    if (status === 'verified') return 'Flag Account';
+    if (status === 'flagged') return 'Review Flag';
+    return 'Reinstate to Verified';
   }
 
   function toggleSelect(driverId) {
@@ -130,8 +141,13 @@ export default function DriverManagement() {
   }
 
   async function handleBulkStatusChange(newStatus) {
+    setBulkConfirm(newStatus);
+  }
+
+  async function confirmBulkStatusChange() {
+    const newStatus = bulkConfirm;
+    if (!newStatus) return;
     const label = newStatus === 'verified' ? 'Verify' : newStatus === 'flagged' ? 'Flag' : 'Revoke';
-    if (!window.confirm(`${label} ${selectedIds.length} selected driver(s)?`)) return;
 
     setIsBulkActing(true);
     try {
@@ -142,10 +158,12 @@ export default function DriverManagement() {
         // eslint-disable-next-line no-await-in-loop
         await updateDriverStatus(driverId, newStatus);
       }
-      loadDrivers(pagination.page);
+      toastSuccess(`${label}d ${selectedIds.length} driver(s).`);
+      setBulkConfirm(null);
+      await loadDrivers(pagination.page);
     } catch (err) {
-      window.alert(err.response?.data?.message || 'Some updates may not have completed. Please review the list.');
-      loadDrivers(pagination.page);
+      toastError(err.response?.data?.message || 'Some updates may not have completed. Please review the list.');
+      await loadDrivers(pagination.page);
     } finally {
       setIsBulkActing(false);
     }
@@ -200,13 +218,13 @@ export default function DriverManagement() {
         >
           <span style={{ fontSize: 13, fontWeight: 600 }}>{selectedIds.length} selected</span>
           <button className="btn btn-primary" disabled={isBulkActing} onClick={() => handleBulkStatusChange('verified')}>
-            ✔️ Verify Selected
+            Verify Selected
           </button>
           <button className="btn btn-secondary" disabled={isBulkActing} onClick={() => handleBulkStatusChange('flagged')}>
-            🚩 Flag Selected
+            Flag Selected
           </button>
           <button className="btn btn-secondary" disabled={isBulkActing} onClick={() => handleBulkStatusChange('revoked')}>
-            ⛔ Revoke Selected
+            Revoke Selected
           </button>
           {isBulkActing && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Working…</span>}
         </div>
@@ -268,19 +286,38 @@ export default function DriverManagement() {
                       )}
                     </td>
                     <td>
-                      <button className="icon-btn" title="View Details" onClick={() => setSelectedDriver(driver)}>
-                        👁
-                      </button>
-                      <button className="icon-btn" title="Edit" onClick={() => setEditingDriver(driver)}>
-                        ✏️
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={actionTitleFor(driver.verificationStatus)}
-                        onClick={() => handleStatusAction(driver)}
-                      >
-                        {actionIconFor(driver.verificationStatus)}
-                      </button>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setSelectedDriver(driver)}>
+                          View
+                        </button>
+                        <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setEditingDriver(driver)}>
+                          Edit
+                        </button>
+                        <div className="row-actions">
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px' }}
+                            aria-haspopup="menu"
+                            aria-expanded={openMenuId === driver.driverId}
+                            onClick={() => setOpenMenuId(openMenuId === driver.driverId ? null : driver.driverId)}
+                          >
+                            More ▾
+                          </button>
+                          {openMenuId === driver.driverId && (
+                            <div className="row-actions-menu" role="menu">
+                              <button
+                                role="menuitem"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  handleStatusAction(driver);
+                                }}
+                              >
+                                {actionTitleFor(driver.verificationStatus)}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -334,6 +371,72 @@ export default function DriverManagement() {
             setEditingDriver(null);
             loadDrivers(pagination.page);
           }}
+        />
+      )}
+
+      {statusConfirm?.mode === 'verify' && (
+        <ConfirmModal
+          title={`Verify ${statusConfirm.driver.firstName} ${statusConfirm.driver.lastName}?`}
+          message="This confirms their license/details are legitimate."
+          confirmLabel="Verify"
+          isWorking={isStatusActing}
+          onClose={() => setStatusConfirm(null)}
+          onConfirm={() => confirmStatusAction('verified')}
+        />
+      )}
+
+      {statusConfirm?.mode === 'reinstate' && (
+        <ConfirmModal
+          title={`Reinstate ${statusConfirm.driver.firstName} ${statusConfirm.driver.lastName} to Verified?`}
+          message="The driver record stays for transparency."
+          confirmLabel="Reinstate"
+          isWorking={isStatusActing}
+          onClose={() => setStatusConfirm(null)}
+          onConfirm={() => confirmStatusAction('verified')}
+        />
+      )}
+
+      {statusConfirm?.mode === 'flag' && (
+        <Modal title={`Flag ${statusConfirm.driver.firstName} ${statusConfirm.driver.lastName}?`} onClose={() => setStatusConfirm(null)}>
+          <div className="form-group">
+            <label>Reason (optional)</label>
+            <input placeholder="e.g. License needs re-check" value={statusReason} onChange={(e) => setStatusReason(e.target.value)} />
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={() => setStatusConfirm(null)} disabled={isStatusActing}>Cancel</button>
+            <button type="button" className="btn btn-primary" onClick={() => confirmStatusAction('flagged', statusReason.trim() || undefined)} disabled={isStatusActing}>
+              {isStatusActing ? 'Working…' : 'Flag Account'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {statusConfirm?.mode === 'flaggedChoice' && (
+        <Modal title={`${statusConfirm.driver.firstName} ${statusConfirm.driver.lastName} is flagged`} onClose={() => setStatusConfirm(null)}>
+          <p style={{ fontSize: 14, marginTop: 0 }}>Revoke permanently, or reinstate to Verified? The record is kept either way.</p>
+          <div className="form-group">
+            <label>Revocation reason (optional, used only when revoking)</label>
+            <input placeholder="e.g. Fraudulent license" value={statusReason} onChange={(e) => setStatusReason(e.target.value)} />
+          </div>
+          <div className="modal-footer">
+            <button type="button" className="btn btn-secondary" onClick={() => confirmStatusAction('verified')} disabled={isStatusActing}>
+              {isStatusActing ? 'Working…' : 'Reinstate'}
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => confirmStatusAction('revoked', statusReason.trim() || undefined)} disabled={isStatusActing}>
+              {isStatusActing ? 'Working…' : 'Revoke'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {bulkConfirm && (
+        <ConfirmModal
+          title={`${bulkConfirm === 'verified' ? 'Verify' : bulkConfirm === 'flagged' ? 'Flag' : 'Revoke'} ${selectedIds.length} selected driver(s)?`}
+          message="Records are kept for transparency — no hard delete."
+          confirmLabel={bulkConfirm === 'verified' ? 'Verify Selected' : bulkConfirm === 'flagged' ? 'Flag Selected' : 'Revoke Selected'}
+          isWorking={isBulkActing}
+          onClose={() => setBulkConfirm(null)}
+          onConfirm={confirmBulkStatusChange}
         />
       )}
     </DashboardLayout>

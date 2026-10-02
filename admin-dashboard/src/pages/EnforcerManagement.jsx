@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
-import Modal from '../components/Modal';
+import Modal, { ConfirmModal } from '../components/Modal';
+import { toastSuccess, toastError } from '../components/Toast';
 import { fetchEnforcers, createEnforcer, updateEnforcer, updateEnforcerStatus, resetEnforcerPassword } from '../api/enforcerApi';
 
 const STATUS_LABELS = {
@@ -20,12 +21,33 @@ export default function EnforcerManagement() {
   const [editingEnforcer, setEditingEnforcer] = useState(null);
   const [selectedEnforcer, setSelectedEnforcer] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [statusConfirm, setStatusConfirm] = useState(null); // { enforcer, nextStatus, message, confirmLabel }
+  const [isStatusActing, setIsStatusActing] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [resetEnforcer, setResetEnforcer] = useState(null);
 
-  async function loadEnforcers(page = 1, searchValue = search, archived = showArchived) {
+  useEffect(() => {
+    if (openMenuId === null) return;
+    function handlePointerDown(e) {
+      if (!e.target.closest?.('.row-actions')) setOpenMenuId(null);
+    }
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') setOpenMenuId(null);
+    }
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [openMenuId]);
+
+  async function loadEnforcers(page = 1, searchValue = search, archived = showArchived, statusValue = statusFilter) {
     setIsLoading(true);
     setLoadError('');
     try {
-      const response = await fetchEnforcers({ search: searchValue, page, includeArchived: archived });
+      const response = await fetchEnforcers({ search: searchValue, page, includeArchived: archived, status: statusValue });
       setEnforcers(response.data.data.enforcers);
       setPagination(response.data.data.pagination);
     } catch (err) {
@@ -42,34 +64,85 @@ export default function EnforcerManagement() {
 
   function handleSearchSubmit(e) {
     e.preventDefault();
-    loadEnforcers(1, search, showArchived);
+    loadEnforcers(1, search, showArchived, statusFilter);
   }
 
-  async function handleStatusChange(enforcer, nextStatus, confirmText) {
-    if (!window.confirm(confirmText)) return;
-    await updateEnforcerStatus(enforcer.enforcerId, nextStatus);
-    loadEnforcers(pagination.page, search, showArchived);
+  async function confirmStatusChange() {
+    if (!statusConfirm) return;
+    setIsStatusActing(true);
+    try {
+      await updateEnforcerStatus(statusConfirm.enforcer.enforcerId, statusConfirm.nextStatus);
+      toastSuccess(`Enforcer ${STATUS_LABELS[statusConfirm.nextStatus].toLowerCase()}.`);
+      setStatusConfirm(null);
+      await loadEnforcers(pagination.page, search, showArchived, statusFilter);
+    } catch (err) {
+      toastError(err.response?.data?.message || 'Unable to update enforcer status.');
+    } finally {
+      setIsStatusActing(false);
+    }
+  }
+
+  async function handleStatusChange(enforcer, nextStatus, confirmText, confirmLabel = 'Confirm') {
+    setStatusConfirm({ enforcer, nextStatus, message: confirmText, confirmLabel });
   }
 
   async function handleToggleSuspend(enforcer) {
     if (enforcer.status === 'suspended') {
-      return handleStatusChange(enforcer, 'active', `Reinstate Officer ${enforcer.lastName}?`);
+      return handleStatusChange(enforcer, 'active', `Reinstate Officer ${enforcer.lastName}?`, 'Reinstate');
     }
-    return handleStatusChange(enforcer, 'suspended', `Suspend Officer ${enforcer.lastName}? They will be unable to log in.`);
+    return handleStatusChange(enforcer, 'suspended', `Suspend Officer ${enforcer.lastName}? They will be unable to log in or issue citations.`, 'Suspend');
   }
 
   async function handleToggleLeave(enforcer) {
     if (enforcer.status === 'on_leave') {
-      return handleStatusChange(enforcer, 'active', `Mark Officer ${enforcer.lastName} back Active?`);
+      return handleStatusChange(enforcer, 'active', `Mark Officer ${enforcer.lastName} back Active?`, 'Mark Active');
     }
-    return handleStatusChange(enforcer, 'on_leave', `Mark Officer ${enforcer.lastName} On Leave? Record is kept.`);
+    return handleStatusChange(enforcer, 'on_leave', `Mark Officer ${enforcer.lastName} On Leave? Record is kept.`, 'Mark On Leave');
   }
 
   async function handleArchive(enforcer) {
     if (enforcer.status === 'archived') {
-      return handleStatusChange(enforcer, 'active', `Restore Officer ${enforcer.lastName} to Active?`);
+      return handleStatusChange(enforcer, 'active', `Restore Officer ${enforcer.lastName} to Active?`, 'Restore');
     }
-    return handleStatusChange(enforcer, 'archived', `Archive Officer ${enforcer.lastName}? They will be hidden by default but the record is kept for transparency.`);
+    return handleStatusChange(enforcer, 'archived', `Archive Officer ${enforcer.lastName}? They will be hidden by default but the record is kept for transparency.`, 'Archive');
+  }
+
+  function handleStatusFilterChange(e) {
+    const value = e.target.value;
+    setStatusFilter(value);
+    const archived = value === 'archived' ? true : showArchived;
+    if (value === 'archived') setShowArchived(true);
+    loadEnforcers(1, search, archived, value);
+  }
+
+  function menuItemsFor(enforcer) {
+    if (enforcer.status === 'archived') {
+      return [
+        { label: 'Restore', danger: false, onSelect: () => handleArchive(enforcer) },
+      ];
+    }
+    if (enforcer.status === 'on_leave') {
+      return [
+        { label: 'Set Active', danger: false, onSelect: () => handleToggleLeave(enforcer) },
+        { label: 'Suspend', danger: true, onSelect: () => handleToggleSuspend(enforcer) },
+        { label: 'Archive', danger: true, onSelect: () => handleArchive(enforcer) },
+        { label: 'Reset Password', danger: false, onSelect: () => setResetEnforcer(enforcer) },
+      ];
+    }
+    if (enforcer.status === 'suspended') {
+      return [
+        { label: 'Set Active', danger: false, onSelect: () => handleToggleSuspend(enforcer) },
+        { label: 'Set On Leave', danger: false, onSelect: () => handleToggleLeave(enforcer) },
+        { label: 'Archive', danger: true, onSelect: () => handleArchive(enforcer) },
+        { label: 'Reset Password', danger: false, onSelect: () => setResetEnforcer(enforcer) },
+      ];
+    }
+    return [
+      { label: 'Set On Leave', danger: false, onSelect: () => handleToggleLeave(enforcer) },
+      { label: 'Suspend', danger: true, onSelect: () => handleToggleSuspend(enforcer) },
+      { label: 'Archive', danger: true, onSelect: () => handleArchive(enforcer) },
+      { label: 'Reset Password', danger: false, onSelect: () => setResetEnforcer(enforcer) },
+    ];
   }
 
   return (
@@ -92,11 +165,24 @@ export default function EnforcerManagement() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1 }}
         />
+        <select
+          className="search-bar"
+          style={{ width: 170, flex: 'none' }}
+          value={statusFilter}
+          onChange={handleStatusFilterChange}
+          aria-label="Filter by status"
+        >
+          <option value="">All Statuses</option>
+          <option value="active">Active</option>
+          <option value="on_leave">On Leave</option>
+          <option value="suspended">Suspended</option>
+          <option value="archived">Archived</option>
+        </select>
         <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
           <input
             type="checkbox"
             checked={showArchived}
-            onChange={(e) => { setShowArchived(e.target.checked); loadEnforcers(1, search, e.target.checked); }}
+            onChange={(e) => { setShowArchived(e.target.checked); loadEnforcers(1, search, e.target.checked, statusFilter); }}
           />
           Show archived
         </label>
@@ -142,33 +228,44 @@ export default function EnforcerManagement() {
                       </span>
                     </td>
                     <td>
-                      <button className="icon-btn" title="View Details" onClick={() => setSelectedEnforcer(enforcer)}>
-                        👁
-                      </button>
-                      <button className="icon-btn" title="Edit" onClick={() => setEditingEnforcer(enforcer)}>
-                        ✏️
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={enforcer.status === 'on_leave' ? 'Mark Active' : 'Mark On Leave'}
-                        onClick={() => handleToggleLeave(enforcer)}
-                      >
-                        {enforcer.status === 'on_leave' ? '✅' : '🏖️'}
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title="Suspend/Reinstate"
-                        onClick={() => handleToggleSuspend(enforcer)}
-                      >
-                        {enforcer.status === 'suspended' ? '✅' : '🚫'}
-                      </button>
-                      <button
-                        className="icon-btn"
-                        title={enforcer.status === 'archived' ? 'Restore' : 'Archive (keeps record)'}
-                        onClick={() => handleArchive(enforcer)}
-                      >
-                        {enforcer.status === 'archived' ? '♻️' : '📦'}
-                      </button>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setSelectedEnforcer(enforcer)}>
+                          View
+                        </button>
+                        {enforcer.status !== 'archived' && (
+                          <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setEditingEnforcer(enforcer)}>
+                            Edit
+                          </button>
+                        )}
+                        <div className="row-actions">
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px' }}
+                            aria-haspopup="menu"
+                            aria-expanded={openMenuId === enforcer.enforcerId}
+                            onClick={() => setOpenMenuId(openMenuId === enforcer.enforcerId ? null : enforcer.enforcerId)}
+                          >
+                            More ▾
+                          </button>
+                          {openMenuId === enforcer.enforcerId && (
+                            <div className="row-actions-menu" role="menu">
+                              {menuItemsFor(enforcer).map((item) => (
+                                <button
+                                  key={item.label}
+                                  role="menuitem"
+                                  className={item.danger ? 'is-danger' : undefined}
+                                  onClick={() => {
+                                    setOpenMenuId(null);
+                                    item.onSelect();
+                                  }}
+                                >
+                                  {item.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -186,12 +283,12 @@ export default function EnforcerManagement() {
               <span>
                 Showing page {pagination.page} of {pagination.totalPages || 1} ({pagination.total} results)
               </span>
-              <button disabled={pagination.page <= 1} onClick={() => loadEnforcers(pagination.page - 1)}>
+              <button disabled={pagination.page <= 1} onClick={() => loadEnforcers(pagination.page - 1, search, showArchived, statusFilter)}>
                 Previous
               </button>
               <button
                 disabled={pagination.page >= pagination.totalPages}
-                onClick={() => loadEnforcers(pagination.page + 1)}
+                onClick={() => loadEnforcers(pagination.page + 1, search, showArchived, statusFilter)}
               >
                 Next
               </button>
@@ -223,6 +320,26 @@ export default function EnforcerManagement() {
 
       {selectedEnforcer && (
         <EnforcerDetailModal enforcer={selectedEnforcer} onClose={() => setSelectedEnforcer(null)} />
+      )}
+
+      {statusConfirm && (
+        <ConfirmModal
+          title={`${statusConfirm.confirmLabel} — Officer ${statusConfirm.enforcer.lastName}?`}
+          message={statusConfirm.message}
+          confirmLabel={statusConfirm.confirmLabel}
+          isWorking={isStatusActing}
+          onClose={() => setStatusConfirm(null)}
+          onConfirm={confirmStatusChange}
+        />
+      )}
+
+      {resetEnforcer && (
+        <Modal
+          title={`Reset Password — Officer ${resetEnforcer.lastName} (${resetEnforcer.employeeId})`}
+          onClose={() => setResetEnforcer(null)}
+        >
+          <ResetPasswordSection enforcer={resetEnforcer} />
+        </Modal>
       )}
     </DashboardLayout>
   );
@@ -444,27 +561,67 @@ function EditEnforcerModal({ enforcer, onClose, onSaved }) {
 
 const STATUS_LABEL_MAP = { active: 'Active', on_leave: 'On Leave', suspended: 'Suspended', archived: 'Archived' };
 
-function EnforcerDetailModal({ enforcer, onClose }) {
+function ResetPasswordSection({ enforcer }) {
   const [resetResult, setResetResult] = useState(null);
   const [isResetting, setIsResetting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
 
   async function handleResetPassword() {
-    if (!window.confirm(`Reset the password for Officer ${enforcer.lastName}? Their current password will stop working immediately.`)) {
-      return;
-    }
     setErrorMessage('');
     setIsResetting(true);
     try {
       const response = await resetEnforcerPassword(enforcer.enforcerId);
       setResetResult(response.data.data);
+      toastSuccess('Password reset.');
+      setShowResetConfirm(false);
     } catch (err) {
-      setErrorMessage(err.response?.data?.message || 'Unable to reset password.');
+      const message = err.response?.data?.message || 'Unable to reset password.';
+      setErrorMessage(message);
+      toastError(message);
     } finally {
       setIsResetting(false);
     }
   }
 
+  return (
+    <div>
+      <h4 style={{ marginTop: 0, marginBottom: 8 }}>Account Recovery</h4>
+      {resetResult ? (
+        <div style={{ background: '#EAF4EB', borderRadius: 8, padding: 12, fontSize: 13 }}>
+          <p style={{ margin: 0 }}>Password reset. Share this with the enforcer directly — it won't be shown again:</p>
+          <p style={{ margin: '8px 0 0' }}>
+            <strong>Username:</strong> {resetResult.username}
+            <br />
+            <strong>New Temporary Password:</strong> {resetResult.temporaryPassword}
+          </p>
+        </div>
+      ) : (
+        <>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
+            If this enforcer forgot their password, reset it here and share the new one with them directly.
+          </p>
+          {errorMessage ? <div className="error-text">{errorMessage}</div> : null}
+          <button className="btn btn-secondary" onClick={() => setShowResetConfirm(true)} disabled={isResetting}>
+            {isResetting ? 'Resetting…' : '🔑 Reset Password'}
+          </button>
+        </>
+      )}
+      {showResetConfirm && (
+        <ConfirmModal
+          title={`Reset password for Officer ${enforcer.lastName}?`}
+          message="Their current password will stop working immediately."
+          confirmLabel="Reset Password"
+          isWorking={isResetting}
+          onClose={() => setShowResetConfirm(false)}
+          onConfirm={handleResetPassword}
+        />
+      )}
+    </div>
+  );
+}
+
+function EnforcerDetailModal({ enforcer, onClose }) {
   return (
     <Modal title={`Enforcer Details — ${enforcer.employeeId}`} onClose={onClose}>
       <div style={{ marginBottom: 16 }}>
@@ -499,27 +656,7 @@ function EnforcerDetailModal({ enforcer, onClose }) {
       </div>
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-        <h4 style={{ marginTop: 0, marginBottom: 8 }}>Account Recovery</h4>
-        {resetResult ? (
-          <div style={{ background: '#EAF4EB', borderRadius: 8, padding: 12, fontSize: 13 }}>
-            <p style={{ margin: 0 }}>Password reset. Share this with the enforcer directly — it won't be shown again:</p>
-            <p style={{ margin: '8px 0 0' }}>
-              <strong>Username:</strong> {resetResult.username}
-              <br />
-              <strong>New Temporary Password:</strong> {resetResult.temporaryPassword}
-            </p>
-          </div>
-        ) : (
-          <>
-            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 0 }}>
-              If this enforcer forgot their password, reset it here and share the new one with them directly.
-            </p>
-            {errorMessage ? <div className="error-text">{errorMessage}</div> : null}
-            <button className="btn btn-secondary" onClick={handleResetPassword} disabled={isResetting}>
-              {isResetting ? 'Resetting…' : '🔑 Reset Password'}
-            </button>
-          </>
-        )}
+        <ResetPasswordSection enforcer={enforcer} />
       </div>
     </Modal>
   );

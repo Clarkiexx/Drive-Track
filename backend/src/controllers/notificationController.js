@@ -148,8 +148,8 @@ async function sendBroadcast(req, res, next) {
     } else if (recipientType === 'single_enforcer') {
       let enforcer = null;
       if (recipientId) enforcer = await Enforcer.findByPk(recipientId, { transaction: t });
-      else if (employeeId) enforcer = await Enforcer.findOne({ where: { employeeId: String(employeeId).trim() }, transaction: t });
-      else if (badgeNumber) enforcer = await Enforcer.findOne({ where: { badgeNumber: String(badgeNumber).trim() }, transaction: t });
+      if (!enforcer && employeeId) enforcer = await Enforcer.findOne({ where: { employeeId: String(employeeId).trim() }, transaction: t });
+      if (!enforcer && badgeNumber) enforcer = await Enforcer.findOne({ where: { badgeNumber: String(badgeNumber).trim() }, transaction: t });
       if (!enforcer) {
         await t.rollback();
         return fail(res, 'Enforcer not found. Provide a valid enforcer, employee ID or badge number.', 404);

@@ -1,7 +1,7 @@
 import client from './client';
 
-export function fetchEnforcers({ search = '', page = 1, limit = 10, includeArchived = false } = {}) {
-  return client.get('/enforcers', { params: { search, page, limit, includeArchived } });
+export function fetchEnforcers({ search = '', page = 1, limit = 10, includeArchived = false, status = '' } = {}) {
+  return client.get('/enforcers', { params: { search, page, limit, includeArchived, status } });
 }
 
 export function createEnforcer(payload) {

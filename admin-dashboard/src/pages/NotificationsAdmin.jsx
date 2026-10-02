@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
+import { toastSuccess, toastError } from '../components/Toast';
 import { sendBroadcast, fetchBroadcasts } from '../api/notificationApi';
 
 const RECIPIENT_LABELS = {
@@ -71,12 +72,20 @@ export default function NotificationsAdmin() {
     setIsSending(true);
     try {
       const response = await sendBroadcast(recipientType, message.trim(), extra);
+      const count = response.data?.data?.recipientCount;
+      if (count === 0) {
+        toastError('No matching recipients — nothing was sent.');
+      } else {
+        toastSuccess(response.data.message);
+      }
       setSuccessMessage(response.data.message);
       setMessage('');
       setIdentifier('');
       loadBroadcasts();
     } catch (err) {
-      setErrorMessage(err.response?.data?.message || 'Unable to send notification.');
+      const apiMessage = err.response?.data?.message || 'Unable to send notification.';
+      setErrorMessage(apiMessage);
+      toastError(apiMessage);
     } finally {
       setIsSending(false);
     }
@@ -147,13 +156,14 @@ export default function NotificationsAdmin() {
           ) : (
             broadcasts.map((b) => (
               <div key={b.broadcastId} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
-                <span className="status-pill status-active">{RECIPIENT_LABELS[b.recipientType]}</span>
+                <span className="status-pill status-active">{RECIPIENT_LABELS[b.recipientType] || b.recipientType}</span>
                 <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>
                   {new Date(b.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4 }}>
-                  To: {RECIPIENT_LABELS[b.recipientType]} ({b.recipientCount})
+                  To: {RECIPIENT_LABELS[b.recipientType] || b.recipientType} ({b.recipientCount})
                 </div>
+                <div style={{ fontSize: 13, marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{b.message}</div>
                 <div style={{ fontSize: 12, color: 'var(--success)', marginTop: 2 }}>● Sent</div>
               </div>
             ))

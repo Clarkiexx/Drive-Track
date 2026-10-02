@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
-import Modal from '../components/Modal';
+import Modal, { ConfirmModal } from '../components/Modal';
+import { toastSuccess, toastError } from '../components/Toast';
 import {
   fetchViolationTypes,
   createViolationType,
@@ -23,6 +24,8 @@ export default function ViolationTypesManagement() {
   const [loadError, setLoadError] = useState('');
   const [modalMode, setModalMode] = useState(null); // null | 'add' | editing violationType object
   const [tab, setTab] = useState('active'); // active | archived | all
+  const [statusConfirm, setStatusConfirm] = useState(null);
+  const [isStatusActing, setIsStatusActing] = useState(false);
 
   async function loadViolationTypes() {
     setIsLoading(true);
@@ -42,15 +45,23 @@ export default function ViolationTypesManagement() {
   }, []);
 
   async function handleToggleActive(vt) {
-    const confirmed = window.confirm(
-      vt.isActive
-        ? `Archive "${vt.description}"? It will be hidden from enforcers for new citations, but past citations are kept for transparency.`
-        : `Restore "${vt.description}" to Active?`
-    );
-    if (!confirmed) return;
+    setStatusConfirm(vt);
+  }
 
-    await updateViolationTypeStatus(vt.violationTypeId, !vt.isActive);
-    loadViolationTypes();
+  async function confirmToggleActive() {
+    const vt = statusConfirm;
+    if (!vt) return;
+    setIsStatusActing(true);
+    try {
+      await updateViolationTypeStatus(vt.violationTypeId, !vt.isActive);
+      toastSuccess(vt.isActive ? 'Violation type archived.' : 'Violation type restored.');
+      setStatusConfirm(null);
+      await loadViolationTypes();
+    } catch (err) {
+      toastError(err.response?.data?.message || 'Unable to update violation type.');
+    } finally {
+      setIsStatusActing(false);
+    }
   }
 
   const filtered = violationTypes.filter((vt) => {
@@ -119,16 +130,18 @@ export default function ViolationTypesManagement() {
                     </span>
                   </td>
                   <td>
-                    <button className="icon-btn" title="Edit" onClick={() => setModalMode(vt)}>
-                      ✏️
-                    </button>
-                    <button
-                      className="icon-btn"
-                      title={vt.isActive ? 'Archive (keeps record)' : 'Restore'}
-                      onClick={() => handleToggleActive(vt)}
-                    >
-                      {vt.isActive ? '📦' : '♻️'}
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button className="btn btn-secondary" style={{ padding: '6px 12px' }} onClick={() => setModalMode(vt)}>
+                        Edit
+                      </button>
+                      <button
+                        className="btn btn-secondary"
+                        style={vt.isActive ? { padding: '6px 12px', color: 'var(--danger)' } : { padding: '6px 12px' }}
+                        onClick={() => handleToggleActive(vt)}
+                      >
+                        {vt.isActive ? 'Archive' : 'Restore'}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -152,6 +165,21 @@ export default function ViolationTypesManagement() {
             setModalMode(null);
             loadViolationTypes();
           }}
+        />
+      )}
+
+      {statusConfirm && (
+        <ConfirmModal
+          title={statusConfirm.isActive ? `Archive "${statusConfirm.description}"?` : `Restore "${statusConfirm.description}" to Active?`}
+          message={
+            statusConfirm.isActive
+              ? 'It will be hidden from enforcers for new citations, but past citations are kept for transparency.'
+              : 'It will be available to enforcers for new citations again.'
+          }
+          confirmLabel={statusConfirm.isActive ? 'Archive' : 'Restore'}
+          isWorking={isStatusActing}
+          onClose={() => setStatusConfirm(null)}
+          onConfirm={confirmToggleActive}
         />
       )}
     </DashboardLayout>

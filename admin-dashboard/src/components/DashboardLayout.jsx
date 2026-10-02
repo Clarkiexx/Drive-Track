@@ -1,5 +1,6 @@
 import React from 'react';
 import Sidebar from './Sidebar';
+import Toasts from './Toast';
 import { useAuth } from '../context/AuthContext';
 
 export default function DashboardLayout({ title, children }) {
@@ -20,6 +21,7 @@ export default function DashboardLayout({ title, children }) {
         </div>
         <div className="page-body">{children}</div>
       </div>
+      <Toasts />
     </div>
   );
 }

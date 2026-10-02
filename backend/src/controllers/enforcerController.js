@@ -21,10 +21,13 @@ function handleValidation(req, res) {
 async function listEnforcers(req, res, next) {
   try {
     const { page, limit } = getPagination(req.query, 10);
-    const { search, includeArchived } = req.query;
+    const { search, includeArchived, status } = req.query;
 
     const where = {};
-    if (includeArchived !== 'true') {
+    const validStatuses = ['active', 'on_leave', 'suspended', 'archived'];
+    if (status && validStatuses.includes(status)) {
+      where.status = status;
+    } else if (includeArchived !== 'true') {
       where.status = { [Op.ne]: 'archived' };
     }
     if (search) {

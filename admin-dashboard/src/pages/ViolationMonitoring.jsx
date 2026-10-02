@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
-import Modal from '../components/Modal';
+import Modal, { ConfirmModal } from '../components/Modal';
+import { toastSuccess, toastError } from '../components/Toast';
 import { fetchCitations, fetchCitation, verifyCitation, overrideFineAmount, settleCitation, cancelCitation, resolveProtest } from '../api/citationApi';
 import { getMediaUrl } from '../api/media';
 
@@ -11,7 +12,7 @@ const STATUS_LABELS = {
   warning_only: 'Warning',
 };
 const STATUS_CLASS = {
-  pending: 'suspended',
+  pending: 'pending',
   settled: 'active',
   cancelled: 'on_leave',
   warning_only: 'pending',
@@ -172,6 +173,7 @@ export default function ViolationMonitoring() {
         <CitationDetailModal
           citationId={selectedCitationId}
           onClose={() => setSelectedCitationId(null)}
+          onListRefresh={() => load(pagination.page)}
           onChanged={() => {
             setSelectedCitationId(null);
             load(pagination.page);
@@ -182,7 +184,7 @@ export default function ViolationMonitoring() {
   );
 }
 
-function CitationDetailModal({ citationId, onClose, onChanged }) {
+function CitationDetailModal({ citationId, onClose, onChanged, onListRefresh }) {
   const [citation, setCitation] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -190,18 +192,28 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
   const [enlargedPhoto, setEnlargedPhoto] = useState(null);
   const [isActing, setIsActing] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [confirm, setConfirm] = useState(null); // { title, message, confirmLabel, action }
 
-  async function runAction(fn) {
+  async function runAction(fn, successMessage, closeAfter = true) {
     if (isActing) return;
     setIsActing(true);
     setActionError('');
     try {
       await fn();
-      onChanged();
+      if (successMessage) toastSuccess(successMessage);
+      if (closeAfter) {
+        onChanged();
+      } else {
+        load();
+        if (onListRefresh) onListRefresh();
+      }
     } catch (err) {
-      setActionError(err.response?.data?.message || 'Action failed. Please try again.');
+      const message = err.response?.data?.message || 'Action failed. Please try again.';
+      setActionError(message);
+      toastError(message);
     } finally {
       setIsActing(false);
+      setConfirm(null);
     }
   }
 
@@ -219,25 +231,46 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
   }, [citationId]);
 
   async function handleVerify() {
-    await runAction(() => verifyCitation(citationId));
+    setConfirm({
+      title: `Verify citation ${citation.citationNumber}?`,
+      message: 'This confirms the citation was reviewed and is valid. You can still settle, cancel, or override it afterward.',
+      confirmLabel: 'Verify',
+      action: () => runAction(() => verifyCitation(citationId), 'Citation verified.', false),
+    });
   }
 
   async function handleSettle() {
-    if (!window.confirm('Mark this citation as settled? Use this once the fine has actually been paid (e.g. the driver settled it in person).')) return;
-    await runAction(() => settleCitation(citationId));
+    setConfirm({
+      title: 'Mark this citation as settled?',
+      message: 'Use this once the fine has actually been paid (e.g. the driver settled it in person).',
+      confirmLabel: 'Mark as Settled',
+      action: () => runAction(() => settleCitation(citationId), 'Citation marked as settled.', true),
+    });
   }
 
   async function handleCancel() {
-    if (!window.confirm('Cancel this citation? This should only be done if it was issued in error.')) return;
-    await runAction(() => cancelCitation(citationId));
+    setConfirm({
+      title: 'Cancel this citation?',
+      message: 'This should only be done if it was issued in error. Cancelled citations cannot be settled.',
+      confirmLabel: 'Cancel Citation',
+      action: () => runAction(() => cancelCitation(citationId), 'Citation cancelled.', true),
+    });
   }
 
   async function handleProtest(action) {
     const msg = action === 'dismiss'
       ? 'Dismiss this protest? The citation will stand and the protest flag will be cleared.'
       : 'Uphold this protest? The citation will be cancelled in the driver\'s favor.';
-    if (!window.confirm(msg)) return;
-    await runAction(() => resolveProtest(citationId, action));
+    setConfirm({
+      title: action === 'dismiss' ? 'Dismiss protest?' : 'Uphold protest?',
+      message: msg,
+      confirmLabel: action === 'dismiss' ? 'Dismiss Protest' : 'Uphold Protest',
+      action: () => runAction(
+        () => resolveProtest(citationId, action),
+        action === 'dismiss' ? 'Protest dismissed.' : 'Protest upheld — citation cancelled.',
+        action === 'uphold',
+      ),
+    });
   }
 
   if (isLoading) {
@@ -364,11 +397,24 @@ function CitationDetailModal({ citationId, onClose, onChanged }) {
           onClose={() => setShowOverride(false)}
           onSaved={() => {
             setShowOverride(false);
+            toastSuccess('Fine amount updated.');
             load();
+            if (onListRefresh) onListRefresh();
           }}
         />
       )}
       </Modal>
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel={confirm.confirmLabel}
+          isWorking={isActing}
+          onClose={() => setConfirm(null)}
+          onConfirm={confirm.action}
+        />
+      )}
 
       {enlargedPhoto && (
         <div

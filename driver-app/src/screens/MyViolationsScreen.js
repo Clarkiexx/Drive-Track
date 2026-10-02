@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { fetchMyViolations } from '../api/citationApi';
 import colors from '../theme/colors';
 
@@ -13,12 +14,26 @@ export default function MyViolationsScreen({ navigation }) {
   const [typeFilter, setTypeFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setIsLoading(true);
+    setErrorMessage('');
     fetchMyViolations()
       .then((res) => setViolations(res.data.data))
       .catch((err) => setErrorMessage(err.response?.data?.message || 'Unable to load your violations.'))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Refresh after returning from hosted checkout so a newly settled
+  // citation shows its updated status without manual reload.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const filtered = useMemo(() => {
     return violations.filter((v) => {

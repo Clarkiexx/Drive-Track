@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { fetchViolation } from '../api/citationApi';
+import { createCheckout } from '../api/paymentApi';
 import { getMediaUrl } from '../config';
 import colors from '../theme/colors';
 
@@ -9,13 +11,42 @@ export default function ViolationDetailScreen({ navigation, route }) {
   const [citation, setCitation] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isPaying, setIsPaying] = useState(false);
+  const [payError, setPayError] = useState('');
+  const [sessionOpened, setSessionOpened] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setIsLoading(true);
+    setErrorMessage('');
     fetchViolation(citationId)
       .then((res) => setCitation(res.data.data))
       .catch((err) => setErrorMessage(err.response?.data?.message || 'Unable to load this record.'))
       .finally(() => setIsLoading(false));
   }, [citationId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function handlePayNow() {
+    if (isPaying) return;
+    setIsPaying(true);
+    setPayError('');
+    try {
+      const res = await createCheckout(citationId);
+      const checkoutUrl = res.data?.data?.checkoutUrl;
+      if (!checkoutUrl) throw new Error('No checkout URL returned.');
+      // Hosted Xendit checkout. Returning/dismissing never settles —
+      // settlement comes only from the verified server webhook.
+      await WebBrowser.openBrowserAsync(checkoutUrl);
+      setSessionOpened(true);
+    } catch (err) {
+      setPayError(err.response?.data?.message || err.message || 'Unable to start payment.');
+    } finally {
+      setIsPaying(false);
+      load();
+    }
+  }
 
   return (
     <ScrollView style={styles.screen}>
@@ -49,10 +80,36 @@ export default function ViolationDetailScreen({ navigation, route }) {
               <Text style={styles.fineLabel}>Total Fine</Text>
               <Text style={styles.fineAmount}>₱{Number(citation.fineAmount).toLocaleString()}</Text>
               <Text style={styles.fineStatus}>
-                {citation.settlementStatus === 'settled' ? '✅ Settled' : '⚠️ Unsettled'}
+                {citation.settlementStatus === 'settled' ? '✅ Settled' : citation.settlementStatus === 'cancelled' ? 'Cancelled' : '⚠️ Unsettled'}
               </Text>
               {citation.settlementStatus === 'pending' && citation.dueDate ? (
                 <DueDateText dueDate={citation.dueDate} />
+              ) : null}
+              {citation.settlementStatus === 'settled' && citation.paymentMethod ? (
+                <Text style={styles.paidViaText}>
+                  Paid via {citation.paymentMethod}
+                  {citation.paymentReference ? ` • ${citation.paymentReference}` : ''}
+                </Text>
+              ) : null}
+              {citation.settlementStatus === 'pending' && (
+                <TouchableOpacity
+                  style={[styles.payButton, isPaying && styles.payButtonDisabled]}
+                  onPress={handlePayNow}
+                  disabled={isPaying}
+                >
+                  <Text style={styles.payButtonText}>{isPaying ? 'Starting payment…' : '💳 Pay Now'}</Text>
+                </TouchableOpacity>
+              )}
+              {payError ? <Text style={styles.payErrorText}>{payError}</Text> : null}
+              {sessionOpened && citation.settlementStatus === 'pending' && !isPaying && !payError ? (
+                <View style={styles.awaitingBox}>
+                  <Text style={styles.awaitingText}>
+                    Payment submitted — awaiting confirmation. Bank transfers may take a while.
+                  </Text>
+                  <TouchableOpacity onPress={load}>
+                    <Text style={styles.refreshText}>↻ Refresh status</Text>
+                  </TouchableOpacity>
+                </View>
               ) : null}
             </View>
           )}
@@ -132,6 +189,14 @@ const styles = StyleSheet.create({
   fineLabel: { fontSize: 12, color: colors.textSecondary },
   fineAmount: { fontSize: 22, fontWeight: '700', color: colors.primaryDark },
   fineStatus: { fontSize: 12, fontWeight: '600', marginTop: 4, color: colors.textPrimary },
+  paidViaText: { fontSize: 12, color: colors.textSecondary, marginTop: 6 },
+  payButton: { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 24, marginTop: 12, width: '100%', alignItems: 'center' },
+  payButtonDisabled: { opacity: 0.6 },
+  payButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
+  payErrorText: { fontSize: 12, color: colors.danger, marginTop: 8, textAlign: 'center' },
+  awaitingBox: { marginTop: 10, alignItems: 'center' },
+  awaitingText: { fontSize: 12, color: colors.warning, fontWeight: '600', textAlign: 'center' },
+  refreshText: { fontSize: 13, color: colors.primary, fontWeight: '700', marginTop: 6 },
   dueNormalText: { fontSize: 12, color: colors.textSecondary, marginTop: 6 },
   dueSoonText: { fontSize: 12, color: colors.warning, fontWeight: '600', marginTop: 6 },
   overdueText: { fontSize: 12, color: colors.danger, fontWeight: '700', marginTop: 6 },

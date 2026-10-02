@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
 import Modal from '../components/Modal';
 import { toastSuccess, toastError } from '../components/Toast';
+import { useAuth } from '../context/AuthContext';
 import { fetchCitations, settleCitation, sendReminder } from '../api/citationApi';
 import { fetchDashboardSummary } from '../api/dashboardApi';
 
@@ -281,6 +282,7 @@ export default function Settlements() {
 }
 
 function MarkPaidModal({ citation, onClose, onConfirm }) {
+  const { admin } = useAuth();
   const [method, setMethod] = useState('cash');
   const [reference, setReference] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -289,9 +291,14 @@ function MarkPaidModal({ citation, onClose, onConfirm }) {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    // Office payment: full amount only, Cash/Other, OR/reference required.
+    if (!reference.trim()) {
+      setError('Official Receipt / OR number is required for office payments.');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await onConfirm(method, reference.trim() || undefined);
+      await onConfirm(method, reference.trim());
     } catch (err) {
       setError(err.response?.data?.message || 'Unable to mark as paid.');
       setIsSubmitting(false);
@@ -299,23 +306,26 @@ function MarkPaidModal({ citation, onClose, onConfirm }) {
   }
 
   return (
-    <Modal title={`Mark Paid — ${citation.citationNumber}`} onClose={onClose}>
+    <Modal title={`Record Office Payment — ${citation.citationNumber}`} onClose={onClose}>
       <form onSubmit={handleSubmit}>
-        <p style={{ fontSize: 13 }}>Amount: <strong>{formatPeso(citation.fineAmount)}</strong></p>
+        <p style={{ fontSize: 13 }}>Amount due (full payment only): <strong>{formatPeso(citation.fineAmount)}</strong></p>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 0 }}>
+          Partial payments are not supported — the full citation amount is recorded as paid.
+        </p>
         <div className="form-group">
           <label>Payment Method</label>
           <select value={method} onChange={(e) => setMethod(e.target.value)}>
             <option value="cash">Cash</option>
-            <option value="gcash">GCash</option>
-            <option value="maya">Maya</option>
-            <option value="bank">Bank transfer</option>
             <option value="other">Other</option>
           </select>
         </div>
         <div className="form-group">
-          <label>Reference No. (optional for cash)</label>
-          <input placeholder="e.g. GCash ref no." value={reference} onChange={(e) => setReference(e.target.value)} />
+          <label>Official Receipt / OR No. <span className="required">*</span></label>
+          <input placeholder="e.g. OR-2026-000123" value={reference} onChange={(e) => setReference(e.target.value)} />
         </div>
+        <p style={{ fontSize: 13 }}>
+          Received by: <strong>{admin ? `${admin.firstName} ${admin.lastName}` : 'System Admin'}</strong>
+        </p>
         {error ? <div className="error-text">{error}</div> : null}
         <div className="modal-footer">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>

@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { fetchMyViolations } from '../api/citationApi';
 import colors from '../theme/colors';
 
@@ -8,12 +9,26 @@ export default function ViolationStatusScreen({ navigation }) {
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setIsLoading(true);
+    setErrorMessage('');
     fetchMyViolations()
       .then((res) => setViolations(res.data.data))
       .catch((err) => setErrorMessage(err.response?.data?.message || 'Unable to load violation status.'))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Overview/progress counts go stale after a payment settles elsewhere —
+  // refresh whenever the screen regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const stats = useMemo(() => {
     const total = violations.length;

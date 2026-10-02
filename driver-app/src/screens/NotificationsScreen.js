@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { fetchMyNotifications, markNotificationRead, markAllNotificationsRead } from '../api/notificationApi';
 import colors from '../theme/colors';
 
@@ -29,6 +30,14 @@ export default function NotificationsScreen({ navigation }) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // A settlement_confirmed notification lands via webhook while the driver
+  // may be elsewhere — refresh on focus so it appears without reload.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const unreadCount = notifications.filter((n) => n.status === 'unread').length;
 

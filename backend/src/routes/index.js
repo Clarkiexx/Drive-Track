@@ -8,6 +8,7 @@ const notificationRoutes = require('./notificationRoutes');
 const dashboardRoutes = require('./dashboardRoutes');
 const chatbotRoutes = require('./chatbotRoutes');
 const auditLogRoutes = require('./auditLogRoutes');
+const paymentRoutes = require('./paymentRoutes');
 
 const router = express.Router();
 
@@ -20,5 +21,6 @@ router.use('/notifications', notificationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/audit-logs', auditLogRoutes);
+router.use('/payments', paymentRoutes);
 
 module.exports = router;

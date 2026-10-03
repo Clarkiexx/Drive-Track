@@ -21,15 +21,15 @@ import colors from '../theme/colors';
 const TOTAL_STEPS = 4;
 
 export default function IssueCitationScreen({ navigation, route }) {
-  const { driver } = route.params;
+  const driver = route.params?.driver;
 
   const [step, setStep] = useState(1);
   const [recordType, setRecordType] = useState('citation'); // 'citation' | 'warning'
 
   // Step 1
-  const [driverFullName] = useState(`${driver.firstName} ${driver.lastName}`);
-  const [driverAddress, setDriverAddress] = useState(driver.address || '');
-  const [licenseNumber] = useState(driver.licenseNumber);
+  const [driverFullName] = useState(driver ? `${driver.firstName} ${driver.lastName}` : '');
+  const [driverAddress, setDriverAddress] = useState(driver?.address || '');
+  const [licenseNumber] = useState(driver?.licenseNumber || '');
 
   // Step 2
   const [vehicleUnitType, setVehicleUnitType] = useState('');
@@ -187,7 +187,7 @@ export default function IssueCitationScreen({ navigation, route }) {
   }
 
   async function handleSubmit() {
-    if (!validateStep()) return;
+    if (!driver || !validateStep()) return;
 
     setIsSubmitting(true);
     try {
@@ -214,6 +214,25 @@ export default function IssueCitationScreen({ navigation, route }) {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  // Guard sits after all hooks so hook order never changes. Without a
+  // driver the wizard cannot render or submit — show a fallback instead.
+  if (!driver) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={styles.backArrow}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Issue Citation</Text>
+        </View>
+        <Text style={styles.emptyText}>No driver selected. Go back and search for a driver first.</Text>
+        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Text style={styles.backButtonText}>← Back to Search</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -721,6 +740,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   backButtonText: { color: colors.textPrimary, fontWeight: '600' },
+  emptyText: { color: colors.textSecondary, textAlign: 'center', marginTop: 30 },
   nextButton: {
     flex: 1,
     backgroundColor: colors.primary,

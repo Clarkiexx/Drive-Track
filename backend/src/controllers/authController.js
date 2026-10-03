@@ -211,7 +211,15 @@ async function driverChangePassword(req, res, next) {
     driver.mustChangePassword = false;
     await driver.save();
 
-    return success(res, null, 'Password updated successfully');
+    // Issue a fresh token: the caller's JWT still carries
+    // mustChangePassword=true and would otherwise stay blocked.
+    const token = signToken({
+      id: driver.driverId,
+      role: 'driver',
+      mustChangePassword: false,
+    });
+
+    return success(res, { token }, 'Password updated successfully');
   } catch (err) {
     next(err);
   }

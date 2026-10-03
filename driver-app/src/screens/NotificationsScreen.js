@@ -21,6 +21,7 @@ export default function NotificationsScreen({ navigation }) {
 
   const load = useCallback(() => {
     setIsLoading(true);
+    setErrorMessage('');
     fetchMyNotifications()
       .then((res) => setNotifications(res.data.data))
       .catch((err) => setErrorMessage(err.response?.data?.message || 'Unable to load notifications.'))

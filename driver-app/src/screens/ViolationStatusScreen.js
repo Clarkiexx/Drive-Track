@@ -35,9 +35,10 @@ export default function ViolationStatusScreen({ navigation }) {
     const settled = violations.filter((v) => v.settlementStatus === 'settled').length;
     const unsettled = violations.filter((v) => v.settlementStatus === 'pending').length;
     const warnings = violations.filter((v) => v.recordType === 'warning').length;
-    const settleable = violations.filter((v) => v.recordType !== 'warning').length;
+    const settleable = violations.filter((v) => v.recordType !== 'warning' && v.settlementStatus !== 'cancelled').length;
+    const cancelled = violations.filter((v) => v.settlementStatus === 'cancelled').length;
     const progressPct = settleable > 0 ? Math.round((settled / settleable) * 100) : 0;
-    return { total, settled, unsettled, warnings, progressPct };
+    return { total, settled, unsettled, warnings, cancelled, progressPct };
   }, [violations]);
 
   const recentActivity = useMemo(() => {

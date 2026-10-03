@@ -4,6 +4,7 @@ import { setAuthToken, registerUnauthorizedHandler } from '../api/client';
 
 const TOKEN_KEY = 'drivetrack_driver_token';
 const DRIVER_KEY = 'drivetrack_driver_info';
+const MUST_CHANGE_KEY = 'drivetrack_driver_must_change';
 
 const AuthContext = createContext(null);
 
@@ -28,6 +29,14 @@ export function AuthProvider({ children }) {
         } catch {
           // Corrupt profile cache — token still works; profile refetches on use.
         }
+        // Restore the forced-change flag too — otherwise a restart would
+        // silently bypass ChangePasswordScreen (server still enforces it).
+        try {
+          const savedMustChange = await SecureStore.getItemAsync(MUST_CHANGE_KEY);
+          setMustChangePassword(savedMustChange === '1');
+        } catch {
+          // Flag unreadable — server remains the authority and will 403.
+        }
       }
       setIsLoading(false);
     })();
@@ -38,6 +47,7 @@ export function AuthProvider({ children }) {
     if (driverInfo) {
       await SecureStore.setItemAsync(DRIVER_KEY, JSON.stringify(driverInfo));
     }
+    await SecureStore.setItemAsync(MUST_CHANGE_KEY, mustChange ? '1' : '0');
     setAuthToken(newToken);
     setToken(newToken);
     setDriver(driverInfo);
@@ -47,6 +57,7 @@ export function AuthProvider({ children }) {
   async function signOut() {
     await SecureStore.deleteItemAsync(TOKEN_KEY);
     await SecureStore.deleteItemAsync(DRIVER_KEY);
+    await SecureStore.deleteItemAsync(MUST_CHANGE_KEY);
     setAuthToken(null);
     setToken(null);
     setDriver(null);

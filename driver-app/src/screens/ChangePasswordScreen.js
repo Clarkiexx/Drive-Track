@@ -15,7 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import colors from '../theme/colors';
 
 export default function ChangePasswordScreen() {
-  const { clearMustChangePassword } = useAuth();
+  const { driver, signIn, clearMustChangePassword } = useAuth();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNew, setShowNew] = useState(false);
@@ -37,9 +37,15 @@ export default function ChangePasswordScreen() {
 
     setIsSubmitting(true);
     try {
-      await changePassword(newPassword);
+      const res = await changePassword(newPassword);
+      const freshToken = res.data?.data?.token;
       Alert.alert('Password updated', 'Your password has been changed successfully.');
-      clearMustChangePassword(); // lets App.js route into the main app now
+      if (freshToken) {
+        // Replace the flagged JWT — the old token stays blocked server-side.
+        await signIn({ token: freshToken, driver, mustChangePassword: false });
+      } else {
+        clearMustChangePassword(); // lets App.js route into the main app now
+      }
     } catch (err) {
       const serverMessage = err.response?.data?.message;
       setErrorMessage(serverMessage || 'Unable to update password. Please try again.');

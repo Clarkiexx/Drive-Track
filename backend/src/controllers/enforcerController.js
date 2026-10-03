@@ -1,4 +1,5 @@
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { Op, fn, col } = require('sequelize');
 const { validationResult } = require('express-validator');
 const { Enforcer, Citation } = require('../models');
@@ -200,7 +201,14 @@ async function resetEnforcerPassword(req, res, next) {
     const enforcer = await Enforcer.findByPk(req.params.id);
     if (!enforcer) return fail(res, 'Enforcer not found', 404);
 
-    const temporaryPassword = Math.random().toString(36).slice(-8);
+    // Fixed-length CSPRNG password from an unambiguous alphabet —
+    // always 10 chars (≥8 minimum), unlike base-36 slicing which can
+    // come up short.
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const temporaryPassword = Array.from(
+      crypto.randomBytes(10),
+      (byte) => alphabet[byte % alphabet.length]
+    ).join('');
     enforcer.passwordHash = await bcrypt.hash(temporaryPassword, SALT_ROUNDS);
     await enforcer.save();
 

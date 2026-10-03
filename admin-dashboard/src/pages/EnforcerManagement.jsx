@@ -110,9 +110,25 @@ export default function EnforcerManagement() {
   function handleStatusFilterChange(e) {
     const value = e.target.value;
     setStatusFilter(value);
-    const archived = value === 'archived' ? true : showArchived;
+    // Selecting a concrete non-archived status clears any forced archived
+    // visibility; 'archived' forces it on; All preserves the checkbox.
+    const archived = value === 'archived' ? true : value === '' ? showArchived : false;
     if (value === 'archived') setShowArchived(true);
+    else if (value !== '') setShowArchived(false);
     loadEnforcers(1, search, archived, value);
+  }
+
+  function handleArchivedToggle(e) {
+    const checked = e.target.checked;
+    setShowArchived(checked);
+    // Unchecking while the dropdown says Archived is contradictory —
+    // fall back to All Statuses instead of showing an empty list.
+    if (!checked && statusFilter === 'archived') {
+      setStatusFilter('');
+      loadEnforcers(1, search, false, '');
+    } else {
+      loadEnforcers(1, search, checked, statusFilter);
+    }
   }
 
   function menuItemsFor(enforcer) {
@@ -182,7 +198,7 @@ export default function EnforcerManagement() {
           <input
             type="checkbox"
             checked={showArchived}
-            onChange={(e) => { setShowArchived(e.target.checked); loadEnforcers(1, search, e.target.checked, statusFilter); }}
+            onChange={handleArchivedToggle}
           />
           Show archived
         </label>

@@ -5,7 +5,7 @@ import { fetchMyViolations } from '../api/citationApi';
 import colors from '../theme/colors';
 
 const TYPE_FILTERS = ['All', 'Citations', 'Warnings'];
-const STATUS_FILTERS = ['All', 'Settled', 'Unsettled'];
+const STATUS_FILTERS = ['All', 'Settled', 'Unsettled', 'Cancelled'];
 
 export default function MyViolationsScreen({ navigation }) {
   const [violations, setViolations] = useState([]);
@@ -41,6 +41,7 @@ export default function MyViolationsScreen({ navigation }) {
       if (typeFilter === 'Warnings' && v.recordType !== 'warning') return false;
       if (statusFilter === 'Settled' && v.settlementStatus !== 'settled') return false;
       if (statusFilter === 'Unsettled' && v.settlementStatus !== 'pending') return false;
+      if (statusFilter === 'Cancelled' && v.settlementStatus !== 'cancelled') return false;
       return true;
     });
   }, [violations, typeFilter, statusFilter]);

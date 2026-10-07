@@ -14,6 +14,9 @@ import AuthCard from "../_components/AuthCard";
 import PasswordField from "../_components/PasswordField";
 import PrimaryButton from "../_components/PrimaryButton";
 import { resolveNextTarget } from "../_lib/next-target";
+// The portal lives in the layout so the frame can dress /login as the admin
+// console on a desktop; a child cannot pass state up, so this is the channel.
+import { useAuthPortal } from "../layout";
 import { SegmentedOptions } from "@/components/common/OptionCard";
 import FormField from "@/components/common/FormField";
 
@@ -35,7 +38,10 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const { login } = useAuth();
 
-  const [role, setRole] = useState<Role>("driver");
+  // Shared with the (auth) layout, which reads it to pick the desk treatment
+  // at large widths. It keeps this page's default of "driver" so nothing
+  // changes for anyone arriving at /login without touching the switcher.
+  const { role, setRole } = useAuthPortal();
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

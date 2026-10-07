@@ -67,12 +67,22 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // 2. Signed-in → /login and /register bounce to the caller's role home.
-  //    The proxy can't reliably know the role (cookie is unsigned-checked),
-  //    so it decodes the claim and falls back to the driver home.
-  if (AUTH_PATHS.has(pathname) && hasSession && token) {
-    return NextResponse.redirect(new URL(homeForRole(roleFromToken(token)), request.url));
-  }
+  // 2. Deliberately NO "already signed in → bounce to role home" rule.
+  //
+  //    There used to be one here, and it made it impossible to switch roles in a
+  //    normal browser: with any session cookie present, /login 307'd away before
+  //    React ran, so the account-type picker and the submit button never
+  //    rendered. A signed-in driver literally could not reach the form to log in
+  //    as an enforcer or an admin — the only way out was Incognito or clearing
+  //    storage. (RoleGate still keeps each role out of the others' workspaces;
+  //    this rule only ever governed whether the LOGIN FORM was reachable.)
+  //
+  //    Rendering it for a signed-in browser is safe: persisting a new session
+  //    overwrites the old token, user blob and mirror cookie wholesale
+  //    (AuthContext.persistSession), and the 401 interceptor clears the session
+  //    before it navigates to /login, so this is also the page it lands on.
+  //
+  //    `AUTH_PATHS` and `roleFromToken` remain only as the record of that rule.
 
   return NextResponse.next();
 }

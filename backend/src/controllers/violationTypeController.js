@@ -1,7 +1,10 @@
 const { validationResult } = require('express-validator');
-const { ViolationType } = require('../models');
 const { success, fail } = require('../utils/response');
 const { logAdminAction } = require('../services/auditLogService');
+
+// Shared Prisma data layer — src/lib/prisma.js is the single place the client
+// and the error/date/number helpers come from (owned by the foundation lane).
+const { prisma, prismaErrorToHttp, toDateOnlyString, toNumber } = require('../lib/prisma');
 
 function handleValidation(req, res) {
   const errors = validationResult(req);
@@ -10,6 +13,14 @@ function handleValidation(req, res) {
     return false;
   }
   return true;
+}
+
+/** :id params are not validated by the routes, so a non-numeric id has to
+ *  keep behaving like Sequelize's findByPk did (null → 404) instead of
+ *  making Prisma throw a client-validation error. */
+function parseId(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 /**
@@ -24,9 +35,9 @@ async function listViolationTypes(req, res, next) {
     const where = {};
     if (req.query.active === 'true') where.isActive = true;
 
-    const violationTypes = await ViolationType.findAll({
+    const violationTypes = await prisma.violationType.findMany({
       where,
-      order: [['articleSection', 'ASC']],
+      orderBy: { articleSection: 'asc' },
     });
 
     return success(res, violationTypes);
@@ -41,12 +52,14 @@ async function createViolationType(req, res, next) {
 
     const { articleSection, description, category, defaultPenalty } = req.body;
 
-    const violationType = await ViolationType.create({
-      articleSection,
-      description,
-      category,
-      defaultPenalty,
-      isActive: true,
+    const violationType = await prisma.violationType.create({
+      data: {
+        articleSection,
+        description,
+        category,
+        defaultPenalty,
+        isActive: true,
+      },
     });
 
     logAdminAction(req.user.id, 'created_violation_type', 'violation_type', violationType.violationTypeId, description);
@@ -60,16 +73,24 @@ async function updateViolationType(req, res, next) {
   try {
     if (!handleValidation(req, res)) return;
 
-    const violationType = await ViolationType.findByPk(req.params.id);
-    if (!violationType) return fail(res, 'Violation type not found', 404);
+    const violationTypeId = parseId(req.params.id);
+    const existing =
+      violationTypeId === null ? null : await prisma.violationType.findUnique({ where: { violationTypeId } });
+    if (!existing) return fail(res, 'Violation type not found', 404);
 
     const { articleSection, description, category, defaultPenalty } = req.body;
-    if (articleSection !== undefined) violationType.articleSection = articleSection;
-    if (description !== undefined) violationType.description = description;
-    if (category !== undefined) violationType.category = category;
-    if (defaultPenalty !== undefined) violationType.defaultPenalty = defaultPenalty;
+    const data = {};
+    if (articleSection !== undefined) data.articleSection = articleSection;
+    if (description !== undefined) data.description = description;
+    if (category !== undefined) data.category = category;
+    if (defaultPenalty !== undefined) data.defaultPenalty = defaultPenalty;
 
-    await violationType.save();
+    // Sequelize's save() skipped the query when nothing was dirty — mirror
+    // that instead of sending an empty UPDATE.
+    const violationType =
+      Object.keys(data).length > 0
+        ? await prisma.violationType.update({ where: { violationTypeId }, data })
+        : existing;
 
     // Note: this only affects citations issued AFTER this change.
     // Past citations keep their penalty_at_issuance snapshot (Module 4).
@@ -88,11 +109,15 @@ async function updateViolationTypeStatus(req, res, next) {
       return fail(res, 'isActive must be true or false', 422);
     }
 
-    const violationType = await ViolationType.findByPk(req.params.id);
-    if (!violationType) return fail(res, 'Violation type not found', 404);
+    const violationTypeId = parseId(req.params.id);
+    const existing =
+      violationTypeId === null ? null : await prisma.violationType.findUnique({ where: { violationTypeId } });
+    if (!existing) return fail(res, 'Violation type not found', 404);
 
-    violationType.isActive = isActive;
-    await violationType.save();
+    const violationType = await prisma.violationType.update({
+      where: { violationTypeId },
+      data: { isActive },
+    });
 
     logAdminAction(
       req.user.id,

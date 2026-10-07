@@ -1,4 +1,19 @@
 const { fail } = require('../utils/response');
+const { prismaErrorToHttp } = require('../lib/prisma');
+
+/**
+ * Foreign-key (P2003) detail — the one Prisma code the shared mapper does
+ * not model (it reports 500 for it), so this handler keeps its historical
+ * 422 body here. Every other Prisma code is delegated to `prismaErrorToHttp`
+ * below, which is the same helper the controllers call inline, so both paths
+ * answer with the same status/message/envelope and the same `errors[]` text.
+ */
+function prismaFieldErrors(err) {
+  const meta = err.meta || {};
+  const raw = meta.field !== undefined ? meta.field : meta.target;
+  if (raw === null || raw === undefined) return null;
+  return Array.isArray(raw) ? raw.map(String) : [String(raw)];
+}
 
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
@@ -10,6 +25,27 @@ function errorHandler(err, req, res, next) {
 
   if (err.name === 'SequelizeValidationError') {
     return fail(res, 'Validation failed', 422, err.errors?.map(e => e.message));
+  }
+
+  // Prisma (Neon) errors — ONE shared mapping (src/lib/prisma.js), so the
+  // status/message/envelope AND the `errors[]` detail text are identical
+  // whether a controller answered inline through `prismaErrorToHttp` or the
+  // error reached this handler: P2002 -> 409 "A record with this value
+  // already exists" + `Duplicate value for: <columns>`, P2025 -> 404
+  // "Resource not found", Prisma validation/P2023 -> 422 "Validation failed";
+  // any other Prisma code (P1001 connection, P2021 missing table, ...) maps
+  // to the shared 500 "Internal server error". The Sequelize branches above
+  // stay as harmless dead code until Phase D.
+  const prismaCode = typeof err.code === 'string' && /^P\d{4}$/.test(err.code);
+  if (prismaCode || err.name === 'PrismaClientValidationError') {
+    if (err.code === 'P2003') {
+      // Schema FKs are Cascade/SetNull, so a P2003 means the request
+      // referenced a row that does not exist (or is still referenced):
+      // a client input problem -> 422, reusing the existing 422 body.
+      return fail(res, 'Validation failed', 422, prismaFieldErrors(err));
+    }
+    const mapped = prismaErrorToHttp(err);
+    return fail(res, mapped.message, mapped.status, mapped.errors);
   }
 
   // Multer upload failures (thrown before controllers run): surface them

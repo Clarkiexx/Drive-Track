@@ -1,10 +1,10 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const { Op, fn, col } = require('sequelize');
 const { validationResult } = require('express-validator');
-const { Enforcer, Citation } = require('../models');
+const { prisma, prismaErrorToHttp } = require('../lib/prisma');
 const { success, fail } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+// Prisma-backed as of the lane-C port (no Sequelize left on this require path).
 const { logAdminAction } = require('../services/auditLogService');
 
 const SALT_ROUNDS = 10;
@@ -18,6 +18,16 @@ function handleValidation(req, res) {
   return true;
 }
 
+/** Known Prisma errors get their mapped status/message (unique violations
+ *  land on the same 409 body the old Sequelize handler produced); 500s fall
+ *  through to next(err) and the generic error handler, as before. */
+function respondWithMappedError(res, next, err, onConflict) {
+  const http = prismaErrorToHttp(err);
+  if (http.status >= 500) return next(err);
+  const message = http.status === 409 && onConflict ? onConflict : http.message;
+  return fail(res, message, http.status, http.errors);
+}
+
 /** GET /enforcers?search=&page=&limit= */
 async function listEnforcers(req, res, next) {
   try {
@@ -29,59 +39,65 @@ async function listEnforcers(req, res, next) {
     if (status && validStatuses.includes(status)) {
       where.status = status;
     } else if (includeArchived !== 'true') {
-      where.status = { [Op.ne]: 'archived' };
+      where.status = { not: 'archived' };
     }
     if (search) {
-      where[Op.or] = [
-        { firstName: { [Op.like]: `%${search}%` } },
-        { lastName: { [Op.like]: `%${search}%` } },
-        { badgeNumber: { [Op.like]: `%${search}%` } },
-        { employeeId: { [Op.like]: `%${search}%` } },
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { badgeNumber: { contains: search, mode: 'insensitive' } },
+        { employeeId: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    const { rows, count } = await Enforcer.findAndCountAll({
-      where,
-      limit,
-      offset: (page - 1) * limit,
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['passwordHash'] },
-    });
+    const [count, rows] = await Promise.all([
+      prisma.enforcer.count({ where }),
+      prisma.enforcer.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
 
     // Bulk-count citations per enforcer in one grouped query rather than
     // one query per row. Previously hardcoded to 0 as a placeholder from
     // before the citations table existed.
     const enforcerIds = rows.map((e) => e.enforcerId);
     const citationCounts = enforcerIds.length
-      ? await Citation.findAll({
-          where: { enforcerId: enforcerIds },
-          attributes: ['enforcerId', [fn('COUNT', col('citation_id')), 'count']],
-          group: ['enforcerId'],
-          raw: true,
+      ? await prisma.citation.groupBy({
+          by: ['enforcerId'],
+          where: { enforcerId: { in: enforcerIds } },
+          _count: { _all: true },
         })
       : [];
-    const countMap = Object.fromEntries(citationCounts.map((r) => [r.enforcerId, Number(r.count)]));
+    const countMap = Object.fromEntries(citationCounts.map((r) => [r.enforcerId, r._count._all]));
 
-    const enforcers = rows.map((e) => ({ ...e.toJSON(), citationsIssued: countMap[e.enforcerId] || 0 }));
+    const enforcers = rows.map((e) => {
+      const { passwordHash: _omit, ...rest } = e;
+      return { ...rest, citationsIssued: countMap[e.enforcerId] || 0 };
+    });
 
     return success(res, {
       enforcers,
       pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
     });
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
 async function getEnforcer(req, res, next) {
   try {
-    const enforcer = await Enforcer.findByPk(req.params.id, {
-      attributes: { exclude: ['passwordHash'] },
-    });
+    const enforcerId = Number(req.params.id);
+    const enforcer = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
     if (!enforcer) return fail(res, 'Enforcer not found', 404);
-    return success(res, enforcer);
+    const { passwordHash: _omit, ...safeEnforcer } = enforcer;
+    return success(res, safeEnforcer);
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -97,7 +113,10 @@ async function createEnforcer(req, res, next) {
 
     const { firstName, lastName, employeeId, badgeNumber, station, address, contactNumber } = req.body;
 
-    const existing = await Enforcer.findOne({ where: { employeeId } });
+    // Case-insensitive, matching the MySQL column collation this replaced.
+    const existing = await prisma.enforcer.findFirst({
+      where: { employeeId: { equals: employeeId, mode: 'insensitive' } },
+    });
     if (existing) {
       return fail(res, 'An enforcer with this Employee ID already exists', 409);
     }
@@ -108,7 +127,9 @@ async function createEnforcer(req, res, next) {
     let username = base;
     let suffix = 1;
     // eslint-disable-next-line no-await-in-loop
-    while (await Enforcer.findOne({ where: { username } })) {
+    while (await prisma.enforcer.findFirst({
+      where: { username: { equals: username, mode: 'insensitive' } },
+    })) {
       username = `${base}${suffix}`;
       suffix += 1;
     }
@@ -116,20 +137,22 @@ async function createEnforcer(req, res, next) {
     const temporaryPassword = employeeId; // simplest option: reuse their ID number as the starting password
     const passwordHash = await bcrypt.hash(temporaryPassword, SALT_ROUNDS);
 
-    const enforcer = await Enforcer.create({
-      firstName,
-      lastName,
-      employeeId,
-      badgeNumber: badgeNumber || null,
-      station: station || 'Cordova Station',
-      address: address || null,
-      contactNumber: contactNumber || null,
-      username,
-      passwordHash,
-      status: 'active',
+    const enforcer = await prisma.enforcer.create({
+      data: {
+        firstName,
+        lastName,
+        employeeId,
+        badgeNumber: badgeNumber || null,
+        station: station || 'Cordova Station',
+        address: address || null,
+        contactNumber: contactNumber || null,
+        username,
+        passwordHash,
+        status: 'active',
+      },
     });
 
-    const { passwordHash: _omit, ...safeEnforcer } = enforcer.toJSON();
+    const { passwordHash: _omit, ...safeEnforcer } = enforcer;
     logAdminAction(req.user.id, 'created_enforcer', 'enforcer', enforcer.enforcerId, `${firstName} ${lastName} (${employeeId})`);
     return success(
       res,
@@ -138,30 +161,34 @@ async function createEnforcer(req, res, next) {
       201
     );
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
 async function updateEnforcer(req, res, next) {
   try {
-    const enforcer = await Enforcer.findByPk(req.params.id);
-    if (!enforcer) return fail(res, 'Enforcer not found', 404);
+    const enforcerId = Number(req.params.id);
+    const existing = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!existing) return fail(res, 'Enforcer not found', 404);
 
+    const data = {};
     const { firstName, lastName, badgeNumber, station, address, contactNumber } = req.body;
-    if (firstName !== undefined) enforcer.firstName = firstName;
-    if (lastName !== undefined) enforcer.lastName = lastName;
-    if (badgeNumber !== undefined) enforcer.badgeNumber = badgeNumber;
-    if (station !== undefined) enforcer.station = station;
-    if (address !== undefined) enforcer.address = address;
-    if (contactNumber !== undefined) enforcer.contactNumber = contactNumber;
+    if (firstName !== undefined) data.firstName = firstName;
+    if (lastName !== undefined) data.lastName = lastName;
+    if (badgeNumber !== undefined) data.badgeNumber = badgeNumber;
+    if (station !== undefined) data.station = station;
+    if (address !== undefined) data.address = address;
+    if (contactNumber !== undefined) data.contactNumber = contactNumber;
 
-    await enforcer.save();
+    const enforcer = await prisma.enforcer.update({ where: { enforcerId }, data });
 
-    const { passwordHash: _omit, ...safeEnforcer } = enforcer.toJSON();
+    const { passwordHash: _omit, ...safeEnforcer } = enforcer;
     logAdminAction(req.user.id, 'updated_enforcer', 'enforcer', enforcer.enforcerId, `${enforcer.firstName} ${enforcer.lastName}`);
     return success(res, safeEnforcer, 'Enforcer updated');
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -174,16 +201,18 @@ async function updateEnforcerStatus(req, res, next) {
       return fail(res, 'Invalid status value', 422);
     }
 
-    const enforcer = await Enforcer.findByPk(req.params.id);
-    if (!enforcer) return fail(res, 'Enforcer not found', 404);
+    const enforcerId = Number(req.params.id);
+    const existing = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!existing) return fail(res, 'Enforcer not found', 404);
 
-    enforcer.status = status;
-    await enforcer.save();
+    const enforcer = await prisma.enforcer.update({ where: { enforcerId }, data: { status } });
 
     logAdminAction(req.user.id, 'changed_enforcer_status', 'enforcer', enforcer.enforcerId, `${enforcer.firstName} ${enforcer.lastName} → ${status}`);
     return success(res, { enforcerId: enforcer.enforcerId, status }, 'Status updated');
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -198,8 +227,11 @@ async function updateEnforcerStatus(req, res, next) {
  */
 async function resetEnforcerPassword(req, res, next) {
   try {
-    const enforcer = await Enforcer.findByPk(req.params.id);
-    if (!enforcer) return fail(res, 'Enforcer not found', 404);
+    const enforcerId = Number(req.params.id);
+    const existing = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!existing) return fail(res, 'Enforcer not found', 404);
 
     // Fixed-length CSPRNG password from an unambiguous alphabet —
     // always 10 chars (≥8 minimum), unlike base-36 slicing which can
@@ -209,8 +241,11 @@ async function resetEnforcerPassword(req, res, next) {
       crypto.randomBytes(10),
       (byte) => alphabet[byte % alphabet.length]
     ).join('');
-    enforcer.passwordHash = await bcrypt.hash(temporaryPassword, SALT_ROUNDS);
-    await enforcer.save();
+    const passwordHash = await bcrypt.hash(temporaryPassword, SALT_ROUNDS);
+    const enforcer = await prisma.enforcer.update({
+      where: { enforcerId },
+      data: { passwordHash },
+    });
 
     logAdminAction(req.user.id, 'reset_enforcer_password', 'enforcer', enforcer.enforcerId, `${enforcer.firstName} ${enforcer.lastName}`);
     return success(
@@ -219,7 +254,7 @@ async function resetEnforcerPassword(req, res, next) {
       'Password reset — share the new temporary password with the enforcer directly'
     );
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 

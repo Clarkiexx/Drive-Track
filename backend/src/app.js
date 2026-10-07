@@ -8,9 +8,12 @@ const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
-// Restrict browser origins via CORS_ORIGIN (comma-separated). Mobile apps
-// don't send an Origin header, so they are unaffected by this setting.
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+// Restrict browser origins via CORS_ORIGIN (comma-separated). The native Expo
+// apps don't send an Origin header, so they are unaffected by this setting —
+// but both BROWSER clients are: the Next.js PWA on :3000 and the Vite admin
+// dashboard on :5173. Both defaults are listed so a fresh checkout works without
+// editing .env; a real deployment should set CORS_ORIGIN explicitly.
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000,http://localhost:5173')
   .split(',')
   .map((o) => o.trim())
   .filter(Boolean);

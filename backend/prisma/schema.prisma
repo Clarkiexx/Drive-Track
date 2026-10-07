@@ -1,0 +1,315 @@
+// DriveTrack — Phase A (Neon migration) Prisma 7 schema.
+//
+// Hand-written from `backend/drivetrack_schema_20261001.sql` (MariaDB 10.4
+// dump). The live MySQL database was intentionally NOT introspected: it
+// carries 7 duplicate unique indexes per logical key (e.g. username..username_7)
+// from repeated `DB_SYNC_ALTER` runs, and db-pull would resurrect all of them.
+// Every logical key below therefore has exactly ONE @@unique.
+//
+// Conventions:
+//  - camelCase field names mirror the Sequelize models in src/models/**;
+//    every snake_case column is renamed back with @map, tables with @@map.
+//  - Datetimes -> DateTime @db.Timestamptz(3); date-only -> DateTime @db.Date.
+//  - Money / lat-lng -> Decimal with the exact precision from the dump.
+//  - The 9 MySQL ENUM columns become native Postgres enums.
+//  - drivers.status_changed_by, citations.received_by and
+//    broadcasts.recipient_id are dangling ints in the dump (no FK) and stay
+//    plain optional Int columns with NO relation.
+//  - FK onDelete is Cascade / SetNull exactly as declared in the dump.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+// Prisma 7: connection URLs for Migrate/db push come from prisma.config.ts
+// (DATABASE_URL_UNPOOLED — the DIRECT Neon endpoint, never the pooler).
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Native enums (9 ENUM columns in the source dump)
+// ---------------------------------------------------------------------------
+
+enum RecordType {
+  citation
+  warning
+  violation
+}
+
+enum SettlementStatus {
+  pending
+  settled
+  cancelled
+  warning_only
+}
+
+enum PaymentMethod {
+  cash
+  gcash
+  maya
+  bank
+  other
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  flagged
+  revoked
+  suspended
+}
+
+enum EnforcerStatus {
+  active
+  on_leave
+  suspended
+  archived
+}
+
+enum ViolationCategory {
+  moving
+  non_moving
+}
+
+enum RecipientType {
+  unsettled_drivers
+  all_drivers
+  all_enforcers
+  everyone
+  single_driver
+  single_enforcer
+}
+
+enum NotificationType {
+  citation_issued
+  warning_issued
+  payment_reminder
+  settlement_confirmed
+  follow_up
+  announcement
+  system_alert
+}
+
+enum NotificationStatus {
+  unread
+  read
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model Admin {
+  adminId      Int      @id @default(autoincrement()) @map("admin_id")
+  firstName    String   @map("first_name") @db.VarChar(255)
+  lastName     String   @map("last_name") @db.VarChar(255)
+  username     String   @db.VarChar(255)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  auditLogs  AuditLog[]
+  broadcasts Broadcast[]
+
+  // Deduped: the dump has username..username_7 (all identical).
+  @@unique([username])
+  @@map("admins")
+}
+
+model Driver {
+  driverId           Int                 @id @default(autoincrement()) @map("driver_id")
+  firstName          String              @map("first_name") @db.VarChar(255)
+  middleInitial      String?             @map("middle_initial") @db.VarChar(5)
+  lastName           String              @map("last_name") @db.VarChar(255)
+  address            String?             @db.VarChar(255)
+  contactNumber      String?             @map("contact_number") @db.VarChar(255)
+  licenseNumber      String              @map("license_number") @db.VarChar(255)
+  username           String?             @db.VarChar(255)
+  passwordHash       String?             @map("password_hash") @db.VarChar(255)
+  mustChangePassword Boolean             @default(true) @map("must_change_password")
+  verificationStatus VerificationStatus? @default(pending) @map("verification_status")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  licensePhotoPath   String?             @map("license_photo_path") @db.VarChar(255)
+  statusReason       String?             @map("status_reason") @db.Text
+  statusChangedAt    DateTime?           @map("status_changed_at") @db.Timestamptz(3)
+  // Dangling int in the dump — no FK, therefore NO relation.
+  statusChangedBy    Int?                @map("status_changed_by")
+  nationality        String?             @default("PHL") @db.VarChar(10)
+  sex                String?             @db.VarChar(10)
+  dateOfBirth        DateTime?           @map("date_of_birth") @db.Date
+  weightKg           Decimal?            @map("weight_kg") @db.Decimal(5, 2)
+  heightM            Decimal?            @map("height_m") @db.Decimal(4, 2)
+  expirationDate     DateTime?           @map("expiration_date") @db.Date
+  agencyCode         String?             @map("agency_code") @db.VarChar(255)
+  bloodType          String?             @map("blood_type") @db.VarChar(10)
+  eyeColor           String?             @map("eye_color") @db.VarChar(30)
+  dlCodes            String?             @map("dl_codes") @db.VarChar(255)
+  condition          String?             @db.VarChar(255)
+
+  citations     Citation[]
+  notifications Notification[]
+
+  // Deduped: license_number..license_number_7 are identical.
+  @@unique([licenseNumber])
+  // Deduped: username..username_7 are identical.
+  @@unique([username])
+  @@map("drivers")
+}
+
+model Enforcer {
+  enforcerId    Int             @id @default(autoincrement()) @map("enforcer_id")
+  firstName     String          @map("first_name") @db.VarChar(255)
+  lastName      String          @map("last_name") @db.VarChar(255)
+  employeeId    String          @map("employee_id") @db.VarChar(255)
+  badgeNumber   String?         @map("badge_number") @db.VarChar(255)
+  station       String?         @default("Cordova Station") @db.VarChar(255)
+  username      String          @db.VarChar(255)
+  passwordHash  String          @map("password_hash") @db.VarChar(255)
+  status        EnforcerStatus? @default(active)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  address       String?         @db.VarChar(255)
+  contactNumber String?         @map("contact_number") @db.VarChar(255)
+
+  citations     Citation[]
+  notifications Notification[]
+
+  // Deduped: employee_id..employee_id_7 are identical.
+  @@unique([employeeId])
+  // Deduped: username..username_7 are identical.
+  @@unique([username])
+  // Deduped: badge_number..badge_number_7 are identical.
+  @@unique([badgeNumber])
+  @@map("enforcers")
+}
+
+model ViolationType {
+  violationTypeId Int             @id @default(autoincrement()) @map("violation_type_id")
+  articleSection  String          @map("article_section") @db.VarChar(255)
+  description     String          @db.VarChar(255)
+  category        ViolationCategory
+  defaultPenalty  Decimal         @map("default_penalty") @db.Decimal(10, 2)
+  isActive        Boolean         @default(true) @map("is_active")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  citationViolations CitationViolation[]
+
+  @@map("violation_types")
+}
+
+model Citation {
+  citationId         Int              @id @default(autoincrement()) @map("citation_id")
+  citationNumber     String           @map("citation_number") @db.VarChar(255)
+  recordType         RecordType       @default(citation) @map("record_type")
+  driverId           Int              @map("driver_id")
+  enforcerId         Int              @map("enforcer_id")
+  vehicleUnitType    String?          @map("vehicle_unit_type") @db.VarChar(255)
+  plateNumber        String?          @map("plate_number") @db.VarChar(255)
+  registeredOwner    String?          @map("registered_owner") @db.VarChar(255)
+  otherViolation     String?          @map("other_violation") @db.VarChar(255)
+  placeOfViolation   String           @map("place_of_violation") @db.VarChar(255)
+  occurredAt         DateTime         @map("occurred_at") @db.Timestamptz(3)
+  latitude           Decimal?         @db.Decimal(10, 7)
+  longitude          Decimal?         @db.Decimal(10, 7)
+  driverUnderProtest Boolean          @default(false) @map("driver_under_protest")
+  fineAmount         Decimal?         @map("fine_amount") @db.Decimal(10, 2)
+  dueDate            DateTime?        @map("due_date") @db.Date
+  verified           Boolean          @default(false)
+  settlementStatus   SettlementStatus @default(pending) @map("settlement_status")
+  settledAt          DateTime?        @map("settled_at") @db.Timestamptz(3)
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  fineOverrideReason String?          @map("fine_override_reason") @db.VarChar(255)
+  paymentMethod      PaymentMethod?   @map("payment_method")
+  paymentReference   String?          @map("payment_reference") @db.VarChar(255)
+  // Dangling int in the dump — no FK, therefore NO relation.
+  receivedBy         Int?             @map("received_by")
+
+  driver   Driver   @relation(fields: [driverId], references: [driverId], onDelete: Cascade)
+  enforcer Enforcer @relation(fields: [enforcerId], references: [enforcerId], onDelete: Cascade)
+
+  violations    CitationViolation[]
+  evidence      Evidence[]
+  notifications Notification[]
+
+  // Deduped: citation_number..citation_number_7 are identical.
+  @@unique([citationNumber])
+  @@map("citations")
+}
+
+model CitationViolation {
+  id                Int     @id @default(autoincrement())
+  citationId        Int     @map("citation_id")
+  violationTypeId   Int     @map("violation_type_id")
+  penaltyAtIssuance Decimal @map("penalty_at_issuance") @db.Decimal(10, 2)
+
+  citation      Citation      @relation(fields: [citationId], references: [citationId], onDelete: Cascade)
+  violationType ViolationType @relation(fields: [violationTypeId], references: [violationTypeId], onDelete: Cascade)
+
+  @@map("citation_violations")
+}
+
+model Evidence {
+  evidenceId  Int      @id @default(autoincrement()) @map("evidence_id")
+  citationId  Int      @map("citation_id")
+  imagePath   String   @map("image_path") @db.VarChar(255)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  citation Citation @relation(fields: [citationId], references: [citationId], onDelete: Cascade)
+
+  @@map("evidence")
+}
+
+model Broadcast {
+  broadcastId    Int          @id @default(autoincrement()) @map("broadcast_id")
+  adminId        Int          @map("admin_id")
+  recipientType  RecipientType @map("recipient_type")
+  message        String       @db.VarChar(500)
+  recipientCount Int          @map("recipient_count")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  // Dangling int in the dump — no FK, therefore NO relation.
+  recipientId    Int?         @map("recipient_id")
+
+  admin         Admin          @relation(fields: [adminId], references: [adminId], onDelete: Cascade)
+  notifications Notification[]
+
+  @@map("broadcasts")
+}
+
+model Notification {
+  notificationId   Int                @id @default(autoincrement()) @map("notification_id")
+  driverId         Int?               @map("driver_id")
+  citationId       Int?               @map("citation_id")
+  broadcastId      Int?               @map("broadcast_id")
+  message          String             @db.Text
+  notificationType NotificationType   @map("notification_type")
+  status           NotificationStatus? @default(unread)
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  enforcerId       Int?               @map("enforcer_id")
+
+  driver    Driver?    @relation(fields: [driverId], references: [driverId], onDelete: SetNull)
+  citation  Citation?  @relation(fields: [citationId], references: [citationId], onDelete: SetNull)
+  broadcast Broadcast? @relation(fields: [broadcastId], references: [broadcastId], onDelete: SetNull)
+  enforcer  Enforcer?  @relation(fields: [enforcerId], references: [enforcerId], onDelete: SetNull)
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  auditLogId Int      @id @default(autoincrement()) @map("audit_log_id")
+  adminId    Int      @map("admin_id")
+  action     String   @db.VarChar(255)
+  targetType String   @map("target_type") @db.VarChar(255)
+  targetId   Int?     @map("target_id")
+  details    String?  @db.VarChar(255)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  admin Admin @relation(fields: [adminId], references: [adminId], onDelete: Cascade)
+
+  @@map("audit_logs")
+}

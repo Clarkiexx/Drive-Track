@@ -1,14 +1,12 @@
 // One-time script to create the first Admin account, since there's no
 // registration flow for admins by design (CTMO provisions this manually).
-// Run once with: node seed-admin.js
+// Run once with: npx tsx seed-admin.js
 
 require('dotenv').config();
 const bcrypt = require('bcrypt');
-const { sequelize, Admin } = require('./src/models');
+const { prisma } = require('./src/lib/prisma');
 
 async function seed() {
-  await sequelize.authenticate();
-
   const username = process.env.SEED_ADMIN_USERNAME || 'admin';
   const password = process.env.SEED_ADMIN_PASSWORD || 'admin123';
   if (!process.env.SEED_ADMIN_PASSWORD) {
@@ -17,25 +15,24 @@ async function seed() {
 
   const passwordHash = await bcrypt.hash(password, 10);
 
-  const [admin, created] = await Admin.findOrCreate({
-    where: { username },
-    defaults: {
-      firstName: 'System',
-      lastName: 'Admin',
-      username,
-      passwordHash,
-    },
-  });
-
-  if (created) {
-    console.log('Admin account created:');
-  } else {
+  const existing = await prisma.admin.findUnique({ where: { username } });
+  if (existing) {
     console.log('Admin account already existed:');
+  } else {
+    await prisma.admin.create({
+      data: {
+        firstName: 'System',
+        lastName: 'Admin',
+        username,
+        passwordHash,
+      },
+    });
+    console.log('Admin account created:');
   }
   console.log(`  username: ${username}`);
   console.log('  (Change this password immediately after first login.)');
 
-  await sequelize.close();
+  await prisma.$disconnect();
 }
 
 seed().catch((err) => {

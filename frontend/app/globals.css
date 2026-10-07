@@ -1,0 +1,338 @@
+@import "tailwindcss";
+
+/* ===========================================================================
+   DriveTrack design tokens
+
+   Greens and neutrals are lifted straight out of
+   driver-app/src/theme/colors.js, and the soft tints are the exact hexes the
+   React Native screens hardcode for their cards, pills and banners. So the web
+   shell and the Expo apps are the same product, not three similar ones.
+   =========================================================================== */
+
+@theme {
+  /* Brand ramp.
+     brand-500 is colors.primary, brand-700 is colors.primaryDark. */
+  --color-brand-50: #f1f8f2;
+  --color-brand-100: #dcece0;
+  --color-brand-200: #b9d7c0;
+  --color-brand-300: #8bbc95;
+  --color-brand-400: #55a067;
+  --color-brand-500: #2e7d32;
+  --color-brand-600: #276b2b;
+  --color-brand-700: #1b5e20;
+  --color-brand-800: #164a1a;
+  --color-brand-900: #123a15;
+
+  /* Neutrals, mapped to the RN theme's surface/text names. */
+  --color-canvas: #f4f6f5;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #eef1f0;
+  --color-field-muted: #f0f1f0;
+  --color-ink: #1a1a1a;
+  --color-muted: #6b7280;
+  --color-hairline: #e2e5e4;
+  --color-placeholder: #9ca3af;
+
+  /* Traffic signal family: stop / hold / go, plus informational blue. */
+  --color-signal-stop: #dc2626;
+  --color-signal-hold: #d97706;
+  --color-signal-go: #2e7d32;
+  --color-signal-info: #2563eb;
+
+  /* Soft fills. These are the literal hexes used by the RN screens for
+     violation boxes, status pills, the fine box, the GPS box and the
+     verification banners. */
+  --color-brand-soft: #eaf4eb;
+  --color-danger-soft: #fdecec;
+  --color-warn-soft: #fef3c7;
+  --color-warn-notice: #fef9e7;
+  --color-warn-ink: #92650b;
+  --color-go-soft: #dcfce7;
+  --color-go-ink: #16a34a;
+  --color-chip-neutral: #f3f4f6;
+  --color-info-soft: #e7f0fe;
+  --color-ember-soft: #fdf2e9;
+  --color-signal-violet: #7c3aed;
+  --color-violet-soft: #f1ebfd;
+
+  /* Admin console (the desktop office shell). The phone ramp is tuned for a
+     390px column, so the console needs its own surfaces: a rail darker than
+     brand-900 (a full-height panel should not read as a second page), a canvas
+     with a green cast, and hairlines that sit a shade cooler than --hairline so
+     tables stay legible at 13px. */
+  --color-console-rail: #0f2618;
+  --color-console-rail-deep: #0a1a10;
+  --color-console-canvas: #f1f4f2;
+  --color-console-line: #dde4de;
+  --color-console-muted: #5d6d64;
+
+  /* Type: Bricolage Grotesque carries the voice, Public Sans keeps the
+     small print legible on a phone held at arm's length. */
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-public-sans), ui-sans-serif, system-ui, sans-serif;
+
+  /* The header band is exactly colors.gradientStart → colors.gradientEnd, so
+     the top of every screen matches the gradient the Expo apps ship. */
+  --brand-band: linear-gradient(160deg, #2e7d32 0%, #1b5e20 100%);
+  --band-inset: linear-gradient(160deg, #1b5e20 0%, #164a1a 100%);
+
+  /* Elevation. List cards in the RN apps carry a hairline and no shadow; only
+     the card that overlaps the header, and the enforcer stats card, lift. */
+  --shadow-card: 0 3px 10px rgb(16 42 20 / 0.06);
+  --shadow-lift: 0 4px 14px rgb(16 42 20 / 0.08), 0 14px 30px -18px rgb(16 42 20 / 0.28);
+  --shadow-float: 0 2px 4px rgb(16 42 20 / 0.05), 0 18px 40px -18px rgb(16 42 20 / 0.3);
+  /* The console is lit like an office: panels float a little off the canvas
+     and the rail throws a long shadow onto it. */
+  --shadow-console: 0 1px 2px rgb(15 38 24 / 0.05), 0 16px 34px -24px rgb(15 38 24 / 0.32);
+  --shadow-console-rail: 16px 0 42px -28px rgb(10 26 16 / 0.6);
+
+  /* Height of the bottom tab bar, excluding the device safe area. */
+  --nav-height: 4.25rem;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* Dark-mode phones keep the light civic surface. This is a government
+       record app: the surface is a document, not a themeable canvas. */
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Pull-to-refresh in the middle of a form is worse than no feedback. */
+    overscroll-behavior-y: none;
+  }
+
+  /* Kill the grey tap flash; every tappable surface here draws its own state. */
+  a,
+  button,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-brand-200);
+    color: var(--color-brand-900);
+  }
+
+  /* Counts, fines and citation numbers should not jitter as they change. */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Form controls are rebuilt on top of these in globals.css below, so the
+     browser's own chrome never shows through on iOS. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+/* ===========================================================================
+   Inputs — one look across every form in the app
+   =========================================================================== */
+
+@layer components {
+  .dt-input {
+    width: 100%;
+    border: 1px solid var(--color-hairline);
+    border-radius: 0.625rem;
+    background-color: var(--color-surface);
+    padding: 0.75rem 0.875rem;
+    font-size: 0.9375rem;
+    line-height: 1.4;
+    color: var(--color-ink);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .dt-input::placeholder {
+    color: var(--color-placeholder);
+  }
+
+  .dt-input:hover:not(:disabled):not(:focus) {
+    border-color: var(--color-brand-300);
+  }
+
+  .dt-input:focus {
+    outline: none;
+    border-color: var(--color-brand-500);
+    box-shadow: 0 0 0 3px rgb(46 125 50 / 0.14);
+  }
+
+  .dt-input:disabled,
+  .dt-input[aria-readonly="true"] {
+    background-color: var(--color-field-muted);
+    color: var(--color-muted);
+    cursor: default;
+  }
+}
+
+/* ===========================================================================
+   Device safe areas + tab-bar clearance
+   =========================================================================== */
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Room for the fixed tab bar plus whatever the device reserves below it. */
+@utility pb-nav {
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px));
+}
+
+/* For sticky footers that sit above the tab bar. */
+@utility pb-nav-safe {
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + 0.875rem);
+}
+
+@utility inset-nav {
+  bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ===========================================================================
+   Brand band, texture and accents
+   =========================================================================== */
+
+@utility brand-band {
+  background-image: var(--brand-band);
+}
+
+@utility band-inset {
+  background-image: var(--band-inset);
+}
+
+/* Fine film grain so the large flat green area is not dead flat. Kept faint —
+   this is a records app, not a poster. */
+@utility grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 120px 120px;
+}
+
+/* The painted centre line that closes the brand band. Tight dash rhythm so it
+   reads as a road seam rather than decoration. */
+@utility road-line {
+  background-image: repeating-linear-gradient(
+    90deg,
+    rgb(255 255 255 / 0.5) 0 9px,
+    var(--color-signal-hold) 9px 19px,
+    rgb(255 255 255 / 0) 19px 27px
+  );
+}
+
+/* Hairline used to separate a card's body from its footer. */
+@utility rule-top {
+  border-top: 1px solid var(--color-hairline);
+}
+
+/* The admin console canvas: a cool-green sheet ruled like graph paper, with a
+   soft light source off the top-left corner so the wide area has a direction.
+   Both layers are faint — this is a records tool, not a poster. */
+@utility desk-canvas {
+  background-color: var(--color-console-canvas);
+  background-image:
+    radial-gradient(130% 80% at 8% -12%, rgb(46 125 50 / 0.09), transparent 58%),
+    linear-gradient(to right, rgb(15 38 24 / 0.042) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(15 38 24 / 0.042) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    56px 56px,
+    56px 56px;
+}
+
+/* ===========================================================================
+   Motion
+   =========================================================================== */
+
+@keyframes dt-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Content that arrives under the band, staggered by the caller. */
+@utility rise {
+  animation: dt-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* A step or list item landing in sequence. */
+@utility rise-sm {
+  animation: dt-rise 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes dt-breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scaleX(0.45);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@utility breathe {
+  animation: dt-breathe 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .rise-sm,
+  .breathe {
+    animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ===========================================================================
+   Toasts (sonner) — pulled into the DriveTrack palette
+   =========================================================================== */
+
+[data-sonner-toaster] {
+  --normal-bg: var(--color-surface);
+  --normal-text: var(--color-ink);
+  --success-bg: var(--color-brand-500);
+  --success-text: #ffffff;
+  --error-bg: var(--color-signal-stop);
+  --error-text: #ffffff;
+  --warning-bg: var(--color-signal-hold);
+  --warning-text: #ffffff;
+  font-family: var(--font-sans);
+}
+
+[data-sonner-toast] {
+  border-radius: 0.875rem !important;
+  box-shadow: var(--shadow-float) !important;
+}

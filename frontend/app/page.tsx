@@ -8,7 +8,7 @@ import { homeForRole } from "@/constants/roles";
 
 /**
  * Entry point for DriveTrack. Decides where someone belongs and sends them
- * there; it never renders a screen of its own.
+ * there; it never renders a screen of its own.......
  */
 export default function RootRedirect() {
   const router = useRouter();

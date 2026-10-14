@@ -18,7 +18,7 @@ export default function RootRedirect() {
 
   useEffect(() => {
     // Wait for the stored session to be read back before deciding, otherwise a
-    // signed-in driver gets bounced to the login screen on a hard refresh.
+    // signed-in driver gets bounced to the login screen on a hard refresh.,,
     if (isLoading) return;
 
     if (!hasSession) {

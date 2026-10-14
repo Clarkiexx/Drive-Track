@@ -15,6 +15,14 @@ const validateBody = [
   body('description').trim().notEmpty().withMessage('Description is required'),
   body('category').isIn(['moving', 'non_moving']).withMessage('Category must be moving or non_moving'),
   body('defaultPenalty').isFloat({ min: 0 }).withMessage('Default penalty must be a positive number'),
+  body('minPenalty')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 })
+    .withMessage('Minimum penalty must be a positive number'),
+  body('maxPenalty')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 })
+    .withMessage('Maximum penalty must be a positive number'),
 ];
 
 router.post('/', allowRoles('admin'), validateBody, violationTypeController.createViolationType);
@@ -27,6 +35,14 @@ const validatePatchBody = [
   body('description').optional().trim().notEmpty().withMessage('Description cannot be empty'),
   body('category').optional().isIn(['moving', 'non_moving']).withMessage('Category must be moving or non_moving'),
   body('defaultPenalty').optional().isFloat({ min: 0 }).withMessage('Default penalty must be a positive number'),
+  body('minPenalty')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 })
+    .withMessage('Minimum penalty must be a positive number'),
+  body('maxPenalty')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0 })
+    .withMessage('Maximum penalty must be a positive number'),
 ];
 
 router.patch('/:id', allowRoles('admin'), validatePatchBody, violationTypeController.updateViolationType);

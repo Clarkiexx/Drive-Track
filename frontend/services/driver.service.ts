@@ -28,11 +28,15 @@ export interface DriverRecord {
   weightKg?: string | number | null;
   heightM?: string | number | null;
   expirationDate?: string | null;
+  issueDate?: string | null;
   agencyCode?: string | null;
   bloodType?: string | null;
   eyeColor?: string | null;
   dlCodes?: string | null;
   condition?: string | null;
+  /** Added by GET /drivers list (bulk-counted per page, not stored). */
+  totalViolations?: number;
+  unsettledViolations?: number;
 }
 
 export interface DriverListParams {
@@ -40,6 +44,18 @@ export interface DriverListParams {
   limit?: number;
   search?: string;
   status?: VerificationStatus;
+}
+
+export interface DriverPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface DriverPage {
+  drivers: DriverRecord[];
+  pagination: DriverPagination;
 }
 
 export interface DriverPayload {
@@ -55,6 +71,7 @@ export interface DriverPayload {
   weightKg?: string | number;
   heightM?: string | number;
   expirationDate?: string;
+  issueDate?: string;
   agencyCode?: string;
   bloodType?: string;
   eyeColor?: string;
@@ -71,6 +88,28 @@ export const driverService = {
   listDrivers: async (params: DriverListParams = {}): Promise<DriverRecord[]> => {
     const res = await api.get<ApiEnvelope<unknown>>("/drivers", { params });
     return unwrapList<DriverRecord>(res.data?.data, "drivers");
+  },
+
+  /**
+   * GET /drivers — paged variant for the admin Drivers register.
+   * Same endpoint as listDrivers, but preserves the backend's
+   * `{ drivers, pagination }` shape so the table can page. listDrivers
+   * is left untouched for existing callers.
+   */
+  listDriversPage: async (params: DriverListParams = {}): Promise<DriverPage> => {
+    const res = await api.get<ApiEnvelope<unknown>>("/drivers", { params });
+    const data = res.data?.data as
+      | { drivers?: DriverRecord[]; pagination?: DriverPagination }
+      | undefined;
+    return {
+      drivers: Array.isArray(data?.drivers) ? data.drivers : [],
+      pagination: {
+        page: Number(data?.pagination?.page) || Number(params.page) || 1,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 8,
+        total: Number(data?.pagination?.total) || 0,
+        totalPages: Number(data?.pagination?.totalPages) || 0,
+      },
+    };
   },
 
   /** GET /drivers/search?licenseNumber=&fullName= — enforcer/admin lookup. */

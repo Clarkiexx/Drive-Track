@@ -14,7 +14,7 @@ import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
 import PageBody from "@/components/common/PageBody";
 import NoticeBox from "@/components/common/NoticeBox";
-import { formatShortDate } from "@/components/common/dates";
+import { formatShortDateManila } from "@/components/common/dates";
 import { getApiErrorMessage } from "@/lib/axios";
 import { citationService, type CitationRecord } from "@/services/citation.service";
 
@@ -224,7 +224,7 @@ export default function ViolationStatusPage() {
                           {record.placeOfViolation}
                         </p>
                         <p className="tabular mt-0.5 text-[11px] text-muted">
-                          {formatShortDate(record.occurredAt)}
+                          {formatShortDateManila(record.occurredAt)}
                         </p>
                       </div>
                     </li>

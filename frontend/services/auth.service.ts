@@ -35,6 +35,15 @@ export interface AuthUser {
   contactNumber?: string | null;
   /** Admin-set explanation shown to flagged / revoked / suspended drivers. */
   statusReason?: string | null;
+  /**
+   * Enforcer-only identity fields. authController.enforcerLogin already
+   * returns both, so keeping them on the session lets the profile screen
+   * show badge and station without a second fetch (drivers cannot read
+   * /enforcers/:id and enforcers cannot either — both are admin-only — so
+   * there is no endpoint to re-fetch from).
+   */
+  badgeNumber?: string | null;
+  station?: string | null;
 }
 
 export interface AuthSession {
@@ -113,6 +122,8 @@ interface LoginPayload {
     enforcerId: number;
     firstName: string;
     lastName: string;
+    badgeNumber?: string | null;
+    station?: string | null;
   };
   admin?: {
     adminId: number;
@@ -171,6 +182,11 @@ function toSession(role: Role, payload: LoginPayload | undefined): AuthSession {
         firstName: enforcer.firstName,
         lastName: enforcer.lastName,
         mustChangePassword: false,
+        // Carried straight from the login payload so /enforcer/profile can
+        // render badge and station without re-fetching (mirrors the driver
+        // branch above).
+        ...(enforcer.badgeNumber ? { badgeNumber: enforcer.badgeNumber } : {}),
+        ...(enforcer.station ? { station: enforcer.station } : {}),
       },
     };
   }

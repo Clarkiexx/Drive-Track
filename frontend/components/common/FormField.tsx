@@ -41,6 +41,7 @@ export default function FormField({
   const shared = {
     id,
     disabled,
+    readOnly: readOnly || undefined,
     "aria-readonly": readOnly || undefined,
     "aria-invalid": error ? true : undefined,
     "aria-describedby": describedBy,

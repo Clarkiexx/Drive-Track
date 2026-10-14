@@ -259,6 +259,39 @@ async function driverChangePassword(req, res, next) {
   }
 }
 
+/**
+ * POST /auth/enforcer/change-password — the signed-in enforcer sets a new
+ * password (My Profile). Mirrors driverChangePassword exactly, including
+ * the fresh-token issue: the caller's JWT is replaced so no stale claims
+ * linger. Same contract on purpose (newPassword only, min 8) — tightening
+ * either endpoint to require the current password is a separate decision
+ * that must land on both at once.
+ */
+async function enforcerChangePassword(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+
+    const { newPassword } = req.body;
+    const enforcerId = Number(req.user.id);
+    const enforcer = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!enforcer) return fail(res, 'Enforcer not found', 404);
+
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await prisma.enforcer.update({
+      where: { enforcerId },
+      data: { passwordHash },
+    });
+
+    const token = signToken({ id: enforcer.enforcerId, role: 'enforcer' });
+
+    return success(res, { token }, 'Password updated successfully');
+  } catch (err) {
+    return respondWithMappedError(res, next, err);
+  }
+}
+
 async function enforcerLogin(req, res, next) {
   try {
     if (!handleValidation(req, res)) return;
@@ -330,5 +363,6 @@ module.exports = {
   driverLogin,
   driverChangePassword,
   enforcerLogin,
+  enforcerChangePassword,
   adminLogin,
 };

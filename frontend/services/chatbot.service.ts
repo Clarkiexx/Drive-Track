@@ -9,9 +9,17 @@ import type { Role } from "@/constants/roles";
  * rather than firing a guaranteed 403.
  */
 
+export interface ChatbotSource {
+  title: string;
+  authority: string;
+  locator: string;
+}
+
 export interface ChatbotAnswer {
   answer: string;
   quickQuestions: string[];
+  /** Verifiable source references (Phase 1 RAG). Absent on older backends. */
+  sources?: ChatbotSource[];
 }
 
 export const chatbotService = {

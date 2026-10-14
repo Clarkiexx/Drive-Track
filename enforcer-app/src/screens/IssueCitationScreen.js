@@ -15,21 +15,65 @@ import {
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { fetchActiveViolationTypes } from '../api/violationTypeApi';
+import { searchDrivers } from '../api/driverApi';
 import { submitCitation } from '../api/citationApi';
 import colors from '../theme/colors';
 
 const TOTAL_STEPS = 4;
 
 export default function IssueCitationScreen({ navigation, route }) {
-  const driver = route.params?.driver;
+  // The driver normally arrives via route.params from DriverSearchScreen, but
+  // the screen can also be opened without one — the guard below then offers
+  // an embedded license search instead of a dead end. State (not just the
+  // initial params) owns the driver so a picked result flows into the wizard.
+  const [driver, setDriver] = useState(route.params?.driver || null);
 
   const [step, setStep] = useState(1);
   const [recordType, setRecordType] = useState('citation'); // 'citation' | 'warning'
 
   // Step 1
-  const [driverFullName] = useState(driver ? `${driver.firstName} ${driver.lastName}` : '');
+  const [driverFullName, setDriverFullName] = useState(
+    driver ? `${driver.firstName} ${driver.lastName}` : ''
+  );
   const [driverAddress, setDriverAddress] = useState(driver?.address || '');
-  const [licenseNumber] = useState(driver?.licenseNumber || '');
+  const [licenseNumber, setLicenseNumber] = useState(driver?.licenseNumber || '');
+
+  // Embedded license search for the no-driver guard below. Same service and
+  // privacy rule as DriverSearchScreen (license number only) — this only
+  // discovers the driver; picking a hit fills the wizard state above, so
+  // there is still exactly one driver source and one submission flow.
+  const [searchLicense, setSearchLicense] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [didSearch, setDidSearch] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+
+  async function handleEmbeddedSearch() {
+    setSearchError('');
+    if (!searchLicense.trim()) {
+      setSearchError('Enter the License No. from the physical license to search. Name search is disabled for privacy.');
+      return;
+    }
+    setIsSearching(true);
+    setDidSearch(false);
+    try {
+      const response = await searchDrivers({ licenseNumber: searchLicense.trim() });
+      setSearchResults(response.data.data);
+      setDidSearch(true);
+    } catch (err) {
+      setSearchError(err.response?.data?.message || 'Search failed. Please try again.');
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  function handleSelectSearchResult(hit) {
+    setDriver(hit);
+    setDriverFullName(`${hit.firstName} ${hit.lastName}`);
+    setDriverAddress(hit.address || '');
+    setLicenseNumber(hit.licenseNumber || '');
+    setSearchError('');
+  }
 
   // Step 2
   const [vehicleUnitType, setVehicleUnitType] = useState('');
@@ -217,21 +261,77 @@ export default function IssueCitationScreen({ navigation, route }) {
   }
 
   // Guard sits after all hooks so hook order never changes. Without a
-  // driver the wizard cannot render or submit — show a fallback instead.
+  // driver the wizard cannot render or submit — offer the license search
+  // inline instead of a dead end. The standalone DriverSearchScreen (with
+  // quick-create) stays reachable via Back to Search.
   if (!driver) {
     return (
-      <View style={styles.container}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Text style={styles.backArrow}>←</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Issue Citation</Text>
         </View>
-        <Text style={styles.emptyText}>No driver selected. Go back and search for a driver first.</Text>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>← Back to Search</Text>
-        </TouchableOpacity>
-      </View>
+
+        <View style={styles.body}>
+          <Text style={styles.stepTitle}>Search Driver</Text>
+          <Text style={styles.gpsSubtext}>License No. only — protects driver privacy</Text>
+
+          <Text style={styles.label}>
+            Driver's License Number<Text style={styles.required}> *</Text>
+          </Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. G-75-45-571924"
+            placeholderTextColor={colors.placeholder}
+            value={searchLicense}
+            onChangeText={setSearchLicense}
+            autoCapitalize="characters"
+          />
+          <Text style={styles.gpsSubtext}>
+            Enter the exact License No. from the physical license, then pick the driver to start the citation.
+          </Text>
+
+          {searchError ? <Text style={styles.errorText}>{searchError}</Text> : null}
+
+          <TouchableOpacity style={[styles.nextButton, styles.searchButton]} onPress={handleEmbeddedSearch} disabled={isSearching}>
+            {isSearching ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.nextButtonText}>🔍 Search Records</Text>
+            )}
+          </TouchableOpacity>
+
+          {didSearch && searchResults !== null ? (
+            searchResults.length > 0 ? (
+              <View style={styles.resultsSection}>
+                <Text style={styles.selectedCount}>
+                  {searchResults.length} result(s) found — pick a driver to continue
+                </Text>
+                {searchResults.map((hit) => (
+                  <TouchableOpacity
+                    key={hit.driverId}
+                    style={styles.violationOption}
+                    onPress={() => handleSelectSearchResult(hit)}
+                  >
+                    <Text style={styles.violationText}>
+                      {hit.firstName} {hit.lastName}
+                    </Text>
+                    <Text style={styles.gpsSubtext}>{hit.licenseNumber}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>No driver found for that search.</Text>
+            )
+          ) : null}
+
+          <TouchableOpacity style={[styles.backButton, styles.searchBackButton]} onPress={() => navigation.goBack()}>
+            <Text style={styles.backButtonText}>← Back to Search</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
     );
   }
 
@@ -740,6 +840,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   backButtonText: { color: colors.textPrimary, fontWeight: '600' },
+  searchButton: { marginTop: 16 },
+  resultsSection: { marginTop: 20 },
+  searchBackButton: { marginTop: 16 },
   emptyText: { color: colors.textSecondary, textAlign: 'center', marginTop: 30 },
   nextButton: {
     flex: 1,

@@ -141,7 +141,14 @@ export default function QuizPage() {
               className="rise mb-4 grid h-[90px] place-items-center"
             >
               {sign ? (
-                <SignShape shape={sign.shape} color={sign.color} size={64} />
+                <SignShape
+                  shape={sign.shape}
+                  color={sign.color}
+                  size={64}
+                  glyph={sign.glyph}
+                  prohibited={sign.prohibited}
+                  solid={sign.solid}
+                />
               ) : null}
             </div>
 

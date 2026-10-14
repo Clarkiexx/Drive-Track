@@ -61,6 +61,18 @@ router.post(
 );
 
 router.post(
+  '/enforcer/change-password',
+  authenticate,
+  allowRoles('enforcer'),
+  [
+    body('newPassword')
+      .isLength({ min: 8 })
+      .withMessage('New password must be at least 8 characters'),
+  ],
+  authController.enforcerChangePassword
+);
+
+router.post(
   '/admin/login',
   [
     body('username').trim().notEmpty().withMessage('Username is required'),

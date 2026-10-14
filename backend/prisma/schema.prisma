@@ -133,6 +133,7 @@ model Driver {
   createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   licensePhotoPath   String?             @map("license_photo_path") @db.VarChar(255)
+  profilePhotoPath   String?             @map("profile_photo_path") @db.VarChar(255)
   statusReason       String?             @map("status_reason") @db.Text
   statusChangedAt    DateTime?           @map("status_changed_at") @db.Timestamptz(3)
   // Dangling int in the dump — no FK, therefore NO relation.
@@ -143,6 +144,7 @@ model Driver {
   weightKg           Decimal?            @map("weight_kg") @db.Decimal(5, 2)
   heightM            Decimal?            @map("height_m") @db.Decimal(4, 2)
   expirationDate     DateTime?           @map("expiration_date") @db.Date
+  issueDate          DateTime?           @map("issue_date") @db.Date
   agencyCode         String?             @map("agency_code") @db.VarChar(255)
   bloodType          String?             @map("blood_type") @db.VarChar(10)
   eyeColor           String?             @map("eye_color") @db.VarChar(30)
@@ -173,6 +175,7 @@ model Enforcer {
   updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   address       String?         @db.VarChar(255)
   contactNumber String?         @map("contact_number") @db.VarChar(255)
+  profilePhotoPath String?      @map("profile_photo_path") @db.VarChar(255)
 
   citations     Citation[]
   notifications Notification[]
@@ -192,6 +195,8 @@ model ViolationType {
   description     String          @db.VarChar(255)
   category        ViolationCategory
   defaultPenalty  Decimal         @map("default_penalty") @db.Decimal(10, 2)
+  minPenalty      Decimal?        @map("min_penalty") @db.Decimal(10, 2)
+  maxPenalty      Decimal?        @map("max_penalty") @db.Decimal(10, 2)
   isActive        Boolean         @default(true) @map("is_active")
   createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)

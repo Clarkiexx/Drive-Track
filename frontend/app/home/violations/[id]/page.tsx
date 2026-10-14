@@ -12,7 +12,8 @@ import {
   InfoRow,
   ViolationsBox,
 } from "@/components/common/CitationReceipt";
-import { formatDateTime } from "@/components/common/dates";
+import { formatDateTimeManila } from "@/components/common/dates";
+import axios from "axios";
 import { getApiErrorMessage } from "@/lib/axios";
 import { getMediaUrl } from "@/lib/media";
 import { citationService, type CitationRecord } from "@/services/citation.service";
@@ -54,6 +55,28 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     return () => window.clearTimeout(timer);
   }, [load]);
 
+  /** Exact driver-facing notice when online checkout is unconfigured. */
+  const ONLINE_PAYMENTS_UNCONFIGURED_MESSAGE =
+    "Online payments are currently unconfigured. Please pay at the CTMO office.";
+
+  /**
+   * The backend answers 503 "Online payments are not configured…" when Xendit
+   * is off. That throw happens before any tab opens, so nothing redirects —
+   * this only swaps in the approved wording. All other pay errors pass
+   * through unchanged (validation, throttle, settled states).
+   */
+  function isPaymentsUnconfigured(error: unknown): boolean {
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status === 503) return true;
+      const message = (error.response?.data as { message?: unknown } | undefined)
+        ?.message;
+      if (typeof message === "string" && message.toLowerCase().includes("not configured")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function handlePayNow() {
     if (isPaying) return;
     setIsPaying(true);
@@ -77,7 +100,11 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
 
       setSessionOpened(true);
     } catch (error) {
-      setPayError(getApiErrorMessage(error, "Unable to start payment."));
+      setPayError(
+        isPaymentsUnconfigured(error)
+          ? ONLINE_PAYMENTS_UNCONFIGURED_MESSAGE
+          : getApiErrorMessage(error, "Unable to start payment.")
+      );
     } finally {
       setIsPaying(false);
       // RN reloaded here too, so a payment that completed in the checkout tab
@@ -228,7 +255,7 @@ function Receipt({ citation, isPaying, payError, awaitingConfirmation, onPay }: 
         />
       )}
 
-      <InfoRow label="Date & Time" value={formatDateTime(citation.occurredAt)} />
+      <InfoRow label="Date & Time" value={formatDateTimeManila(citation.occurredAt)} />
       <InfoRow label="Location" value={citation.placeOfViolation} />
       {citation.plateNumber ? (
         <InfoRow label="Plate Number" value={citation.plateNumber} />

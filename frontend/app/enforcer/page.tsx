@@ -232,12 +232,13 @@ export default function EnforcerHomePage() {
         </div>
       ) : null}
 
-      {/* Sits outside a <PageBody> because the grid brings its own 14px gutter
-          while the band title sits at 20px, exactly as on the driver home.
-          pb-nav keeps the last row clear of the fixed tab bar. */}
+      {/* Home + More bar below (variant="home"): the grid above covers the
+          rest, so the full four-tab bar would only duplicate it. Other
+          enforcer screens keep the full bar. pb-nav keeps the last row
+          clear of the fixed tab bar. */}
       <QuickAccessGrid title="Quick Actions" actions={quickActions} className="pb-nav" />
 
-      <BottomNav />
+      <BottomNav role="enforcer" variant="home" />
     </>
   );
 }

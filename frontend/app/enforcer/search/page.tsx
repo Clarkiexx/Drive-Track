@@ -26,10 +26,12 @@ import { driverService, type DriverRecord } from "@/services/driver.service";
  * QuickCreateForm (the same file, ~117 further lines).
  *
  * TWO MODES, from `?mode=`:
- *   - "issueCitation" (default) — picking a driver continues into the wizard.
- *     Also the only mode that offers "create a new driver record" on a miss,
- *     because a citation cannot be written against a driver that does not exist.
- *   - "lookup" — picking a driver opens their record instead.
+ *   - "lookup" (default) — the standalone driver search: picking a driver
+ *     opens their record, never the citation wizard.
+ *   - "issueCitation" — picking a driver continues into the wizard at
+ *     /enforcer/issue?driverId=. Only explicit links from the citation flow
+ *     (the issue page's back navigation) use this; every plain link (home
+ *     grid, tab bar, More hub) lands in lookup.
  *
  * LICENSE NUMBER ONLY, AND THAT IS A BACKEND RULE, NOT A UI CHOICE:
  * driverController.searchDrivers answers 422 "Search by license number only…"
@@ -77,8 +79,10 @@ function DriverSearchScreen() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // RN: `const mode = route.params?.mode || 'issueCitation'`.
-  const isLookup = searchParams.get("mode") === "lookup";
+  // Standalone search is profile-only: only an explicit
+  // `?mode=issueCitation` (linked from the citation flow) continues into
+  // the wizard.
+  const isLookup = searchParams.get("mode") !== "issueCitation";
 
   const [licenseNumber, setLicenseNumber] = useState("");
   const [results, setResults] = useState<DriverRecord[] | null>(null);
@@ -178,7 +182,7 @@ function DriverSearchScreen() {
           ) : (
             <>
               <Search size={16} strokeWidth={2.4} aria-hidden />
-              Search Records
+              Search Driver
             </>
           )}
         </button>
@@ -210,18 +214,18 @@ function DriverSearchScreen() {
           <div className="mt-2">
             <EmptyState title="No driver found for that search." />
 
-            {/* RN only offers quick-create on a miss while issuing a citation. */}
-            {!isLookup ? (
-              <div className="-mt-4 text-center">
-                <button
-                  type="button"
-                  onClick={() => setShowQuickCreate(true)}
-                  className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
-                >
-                  + Create a new driver record
-                </button>
-              </div>
-            ) : null}
+            {/* Quick-create on a miss in both modes — lookup opens the new
+                record, citation mode continues into the wizard (both via
+                handleSelectDriver below). */}
+            <div className="-mt-4 text-center">
+              <button
+                type="button"
+                onClick={() => setShowQuickCreate(true)}
+                className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
+              >
+                + Create a new driver record
+              </button>
+            </div>
           </div>
         )
       ) : null}

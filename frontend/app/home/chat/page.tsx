@@ -6,7 +6,7 @@ import { LoaderCircle } from "lucide-react";
 
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
-import { chatbotService } from "@/services/chatbot.service";
+import { chatbotService, type ChatbotSource } from "@/services/chatbot.service";
 import type { ApiEnvelope } from "@/lib/axios";
 import { useAuth } from "@/context/AuthContext";
 
@@ -27,6 +27,8 @@ type Message = {
   id: number;
   from: "bot" | "user";
   text: string;
+  /** Verifiable sources for bot answers (Phase 1 RAG); user lines omit it. */
+  sources?: ChatbotSource[];
 };
 
 /**
@@ -76,10 +78,10 @@ export default function ChatPage() {
   const nextMessageId = useRef(1);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
-  function pushMessage(from: Message["from"], text: string) {
+  function pushMessage(from: Message["from"], text: string, sources?: ChatbotSource[]) {
     nextMessageId.current += 1;
     const id = nextMessageId.current;
-    setMessages((previous) => [...previous, { id, from, text }]);
+    setMessages((previous) => [...previous, { id, from, text, sources }]);
   }
 
   async function sendMessage(text: string) {
@@ -92,7 +94,7 @@ export default function ChatPage() {
 
     try {
       const response = await chatbotService.ask(trimmed, user?.role ?? "driver");
-      pushMessage("bot", response.answer);
+      pushMessage("bot", response.answer, response.sources);
       if (response.quickQuestions) {
         setQuickQuestions(response.quickQuestions);
       }
@@ -178,9 +180,16 @@ export default function ChatPage() {
                 >
                   🤖
                 </span>
-                <p className="max-w-[78%] rounded-[14px] rounded-bl-[4px] bg-surface p-3 text-[13px] leading-[18px] text-ink">
-                  {message.text}
-                </p>
+                <div className="max-w-[78%]">
+                  <p className="rounded-[14px] rounded-bl-[4px] bg-surface p-3 text-[13px] leading-[18px] text-ink">
+                    {message.text}
+                  </p>
+                  {message.sources && message.sources.length > 0 ? (
+                    <p className="mt-1 px-1 text-[11px] leading-snug text-muted">
+                      Sources: {message.sources.map((s) => s.locator || s.title).join(" · ")}
+                    </p>
+                  ) : null}
+                </div>
               </li>
             ) : (
               <li key={message.id} className="flex justify-end">

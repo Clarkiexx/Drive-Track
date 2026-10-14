@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosInstance } from "axios";
+import { isRole, type Role } from "@/constants/roles";
 
 /**
  * Single axios instance for the whole DriveTrack PWA.
@@ -8,16 +9,51 @@ import axios, { AxiosError, type AxiosInstance } from "axios";
  *   - There is NO refresh-token endpoint and NO http-only session cookie, so
  *     there is deliberately no refresh/rotation logic here — a dead token is a
  *     hard logout (see the 401 interceptor below).
- *   - The token is mirrored into the `drivetrack_token` cookie purely so
- *     `proxy.ts` can gate routes server-side; it is not sent to the backend.
+ *   - Each role's token is mirrored into a same-named cookie purely so
+ *     `proxy.ts` can gate routes server-side; cookies are never sent to the
+ *     backend.
+ *
+ * Concurrent sessions: one Chrome browser can hold an admin, a driver AND an
+ * enforcer session at the same time (one tab per role). Every store is
+ * namespaced per role — a tab only ever reads/writes/clears its own role's
+ * keys, so logging in/out (or a 401) in one tab never disturbs the others.
  */
 
-/** localStorage keys. Mirrored by context/AuthContext.tsx. */
+/**
+ * Per-role localStorage keys (token + profile blob) and mirror-cookie names.
+ * The cookie and the token key share a name on purpose — they are different
+ * stores (cookie jar vs localStorage), and one constant covers both.
+ */
+export const TOKEN_STORAGE_KEYS: Record<Role, string> = {
+  admin: "auth_admin",
+  driver: "auth_driver",
+  enforcer: "auth_enforcer",
+};
+
+export const USER_STORAGE_KEYS: Record<Role, string> = {
+  admin: "auth_admin_user",
+  driver: "auth_driver_user",
+  enforcer: "auth_enforcer_user",
+};
+
+/**
+ * Legacy single-session keys, superseded by the per-role maps above. Kept
+ * only as documentation: entries left behind under these names are orphaned
+ * (each role re-logs in once) and are never read. Do NOT add new reads of
+ * these — that would reintroduce the cross-tab conflict.
+ * @deprecated
+ */
 export const TOKEN_STORAGE_KEY = "drivetrack_token";
+/** @deprecated See TOKEN_STORAGE_KEY. */
 export const USER_STORAGE_KEY = "drivetrack_user";
 
-/** Cookie name read by proxy.ts (same value as TOKEN_STORAGE_KEY, different store). */
+/** Cookie names read by proxy.ts (same values as TOKEN_STORAGE_KEYS). */
+export const TOKEN_COOKIE_NAMES: Record<Role, string> = { ...TOKEN_STORAGE_KEYS };
+/** @deprecated See TOKEN_STORAGE_KEY. */
 export const TOKEN_COOKIE_NAME = "drivetrack_token";
+
+/** Marker remembering which role logged in most recently (landing-page hint). */
+const LAST_ROLE_KEY = "auth_last_role";
 
 /** Envelope every backend route returns: { success, message, data, errors? }. */
 export interface ApiEnvelope<T> {
@@ -55,6 +91,66 @@ export const API_BASE_URL = String(
 
 const DEFAULT_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days, in seconds
 
+/**
+ * Which role owns a page path. Driver auth flows without a role prefix
+ * (/change-password, /register, /forgot-password) belong to the driver —
+ * only drivers ever open them. /login and / have no owner (see
+ * resolveBootRole); anything unrecognised returns null (no token attached).
+ */
+export function roleForPathname(pathname: string | null | undefined): Role | null {
+  if (!pathname) return null;
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return "admin";
+  if (pathname === "/enforcer" || pathname.startsWith("/enforcer/")) return "enforcer";
+  if (
+    pathname === "/home" ||
+    pathname.startsWith("/home/") ||
+    pathname === "/change-password" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password"
+  ) {
+    return "driver";
+  }
+  return null;
+}
+
+/**
+ * Which role owns an API request. Role-scoped auth endpoints
+ * (/auth/driver/…, /auth/enforcer/…, /auth/admin/…) name their role, so the
+ * correct key is used even from role-less pages like /login. Returns null for
+ * shared endpoints — callers then fall back to the page's role.
+ */
+export function roleForRequestUrl(url = ""): Role | null {
+  const match = /\/auth\/(driver|enforcer|admin)(?:\/|[?#]|$)/.exec(url);
+  return match && isRole(match[1]) ? match[1] : null;
+}
+
+/** Current tab's role from its location (null outside the browser). */
+function currentPathRole(): Role | null {
+  if (typeof window === "undefined") return null;
+  return roleForPathname(window.location.pathname);
+}
+
+/**
+ * Boot-time role resolution for role-less pages (/ and /login): the most
+ * recently used role with a stored token wins, else the first stored token in
+ * driver → enforcer → admin order. Only ever used to decide which session to
+ * restore locally — it never sends another role's token anywhere.
+ */
+export function resolveBootRole(): Role | null {
+  if (typeof window === "undefined") return null;
+  const last = window.localStorage.getItem(LAST_ROLE_KEY);
+  if (isRole(last) && window.localStorage.getItem(TOKEN_STORAGE_KEYS[last])) return last;
+  for (const role of ["driver", "enforcer", "admin"] as const) {
+    if (window.localStorage.getItem(TOKEN_STORAGE_KEYS[role])) return role;
+  }
+  return null;
+}
+
+/** Role for this tab: its path prefix, or the boot resolution on bare pages. */
+export function currentRole(): Role | null {
+  return currentPathRole() ?? resolveBootRole();
+}
+
 /** Reads the JWT `exp` claim (seconds) so the mirror cookie dies with the token. */
 function tokenMaxAge(token: string): number {
   try {
@@ -72,34 +168,66 @@ function tokenMaxAge(token: string): number {
   return DEFAULT_COOKIE_MAX_AGE;
 }
 
-/** Persists the session to localStorage AND to the proxy-only mirror cookie. */
-export function persistToken(token: string): void {
+/**
+ * Persists one role's session to its localStorage slots AND to its
+ * proxy-only mirror cookie. Other roles' keys are never touched, so a login
+ * in this tab cannot disturb sibling tabs.
+ */
+export function persistToken(token: string, role: Role): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  document.cookie = `${TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${tokenMaxAge(
+  window.localStorage.setItem(TOKEN_STORAGE_KEYS[role], token);
+  window.localStorage.setItem(LAST_ROLE_KEY, role);
+  document.cookie = `${TOKEN_COOKIE_NAMES[role]}=${encodeURIComponent(token)}; Path=/; Max-Age=${tokenMaxAge(
     token
   )}; SameSite=Lax`;
 }
 
-/** Removes token + user from every store (localStorage and cookie). */
-export function clearSession(): void {
+/**
+ * Removes one role's token + user blob + mirror cookie. Pass null to clear
+ * nothing (callers resolve the role first; unknown role clears nothing rather
+ * than risking another role's session).
+ */
+export function clearSession(role: Role | null): void {
+  if (typeof window === "undefined" || !role) return;
+  window.localStorage.removeItem(TOKEN_STORAGE_KEYS[role]);
+  window.localStorage.removeItem(USER_STORAGE_KEYS[role]);
+  document.cookie = `${TOKEN_COOKIE_NAMES[role]}=; Path=/; Max-Age=0; SameSite=Lax`;
+}
+
+/**
+ * Token for the given role (defaults to this tab's role). A tab only ever
+ * asks for its own role — cross-role reads would let tabs impersonate each
+ * other, so there is deliberately no "give me every token" helper.
+ */
+export function getStoredToken(role: Role | null = currentRole()): string | null {
+  if (typeof window === "undefined" || !role) return null;
+  return window.localStorage.getItem(TOKEN_STORAGE_KEYS[role]);
+}
+
+/** Stored profile blob for the given role (null when absent/unparseable). */
+export function getStoredUser<T>(role: Role | null): T | null {
+  if (typeof window === "undefined" || !role) return null;
+  try {
+    const raw = window.localStorage.getItem(USER_STORAGE_KEYS[role]);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    window.localStorage.removeItem(USER_STORAGE_KEYS[role]);
+    return null;
+  }
+}
+
+/** Persists the profile blob alongside its role's token. */
+export function persistUser(role: Role, user: unknown): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_STORAGE_KEY);
-  localStorage.removeItem(USER_STORAGE_KEY);
-  document.cookie = `${TOKEN_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax`;
+  window.localStorage.setItem(USER_STORAGE_KEYS[role], JSON.stringify(user));
 }
 
-/** Token currently in localStorage, or null outside the browser. */
-export function getStoredToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_STORAGE_KEY);
-}
-
-/** Re-writes the mirror cookie from localStorage (self-heals an expired cookie). */
-export function syncAuthCookie(): void {
-  const token = getStoredToken();
-  if (!token) return;
-  document.cookie = `${TOKEN_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${tokenMaxAge(
+/** Re-writes this tab's mirror cookie from its own key (self-heal). */
+export function syncAuthCookie(role: Role | null = currentRole()): void {
+  const token = role ? getStoredToken(role) : null;
+  if (!token || !role) return;
+  document.cookie = `${TOKEN_COOKIE_NAMES[role]}=${encodeURIComponent(token)}; Path=/; Max-Age=${tokenMaxAge(
     token
   )}; SameSite=Lax`;
 }
@@ -135,7 +263,12 @@ const api: AxiosInstance = axios.create({
 });
 
 api.interceptors.request.use((config) => {
-  const token = getStoredToken();
+  // Role-scoped auth endpoints name their role (/auth/driver/…); everything
+  // else belongs to this tab's route prefix. Either way the attached token
+  // can only ever be this tab's own role — cross-role requests keep failing
+  // at the backend exactly as before.
+  const role = roleForRequestUrl(config.url) ?? currentRole();
+  const token = role ? getStoredToken(role) : null;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   } else {
@@ -151,10 +284,12 @@ api.interceptors.response.use(
     const requestUrl = error.config?.url ?? "";
 
     if (status === 401 && !isCredentialRequest(requestUrl) && typeof window !== "undefined") {
-      // Stale/invalid/expired token: drop the session instead of leaving the
-      // app stuck on a screen with a dead token (driver-app 401 handling).
+      // Stale/invalid/expired token: drop ONLY this tab's role session.
+      // Sibling tabs keep their own keys, cookies and in-memory state, so a
+      // dead admin token never signs the driver's tab out (and vice versa).
+      const role = roleForRequestUrl(requestUrl) ?? currentPathRole();
       const alreadyOnLogin = window.location.pathname.startsWith("/login");
-      clearSession();
+      clearSession(role);
       unauthorizedHandler?.();
       if (!alreadyOnLogin) {
         // Deliberate full page load (not router.push): every cached query and
@@ -173,15 +308,32 @@ api.interceptors.response.use(
 /**
  * Pulls the human-readable message the backend puts in its { success, message }
  * envelope, falling back to something sane for network/500 failures.
+ *
+ * When the envelope message is the generic "Validation failed" (express
+ * validators, Prisma value mapping), the per-field `errors` entries say
+ * more — join up to three, tolerating string, { msg } and { message }
+ * shapes (P2002 uses strings, express-validator uses { msg }).
  */
 export function getApiErrorMessage(error: unknown, fallback = "Something went wrong"): string {
   if (axios.isAxiosError(error)) {
     const envelope = error.response?.data as ApiEnvelope<unknown> | undefined;
-    if (envelope?.message) return envelope.message;
+    if (envelope?.message && envelope.message !== "Validation failed") return envelope.message;
     if (envelope?.errors && Array.isArray(envelope.errors)) {
-      const first = envelope.errors[0] as { msg?: string } | undefined;
-      if (first?.msg) return first.msg;
+      const details = (envelope.errors as unknown[])
+        .map((entry) => {
+          if (typeof entry === "string") return entry;
+          if (entry && typeof entry === "object") {
+            const record = entry as { msg?: unknown; message?: unknown };
+            if (typeof record.msg === "string") return record.msg;
+            if (typeof record.message === "string") return record.message;
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .slice(0, 3);
+      if (details.length > 0) return details.join("; ");
     }
+    if (envelope?.message) return envelope.message;
     if (!error.response) return "Cannot reach the server. Check the backend address.";
   }
   if (error instanceof Error && error.message) return error.message;

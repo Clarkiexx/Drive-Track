@@ -59,6 +59,40 @@ export function formatDateTime(value: string | number | Date): string {
   return `${formatLongDate(date)} at ${formatTime(date)}`;
 }
 
+/**
+ * Philippine wall-clock formatters for real instants such as
+ * `occurredAt` (stored as timestamptz, i.e. an exact moment).
+ *
+ * WHY these exist alongside the UTC helpers above: the UTC pin keeps server
+ * and client HTML identical, but every officer and driver reads the result
+ * as local time — in Asia/Manila (UTC+8) a 4:30 PM issuance rendered as
+ * "8:30 AM". An explicit `timeZone` is still fully deterministic, so SSR and
+ * hydration agree exactly as before; only the labelled zone changes.
+ *
+ * Do NOT use these for bare calendar dates (`dueDate` arrives as
+ * 'YYYY-MM-DD' with no zone attached) — those keep the UTC helpers, which
+ * render the named day unchanged.
+ */
+const MANILA_TZ = "Asia/Manila" as const;
+
+/** "Mar 4, 2025" in Philippine time — for instants, not calendar dates. */
+export function formatShortDateManila(value: string | number | Date): string {
+  return toDate(value).toLocaleDateString("en-US", { ...DATE_SHORT, timeZone: MANILA_TZ });
+}
+
+/** "9:30 AM" in Philippine time — for instants, not calendar dates. */
+export function formatTimeManila(value: string | number | Date): string {
+  return toDate(value).toLocaleTimeString("en-US", { ...TIME_SHORT, timeZone: MANILA_TZ });
+}
+
+/** "March 4, 2025 at 9:30 AM" in Philippine time — for instants. */
+export function formatDateTimeManila(value: string | number | Date): string {
+  const date = toDate(value);
+  const day = date.toLocaleDateString("en-US", { ...DATE_LONG, timeZone: MANILA_TZ });
+  const time = date.toLocaleTimeString("en-US", { ...TIME_SHORT, timeZone: MANILA_TZ });
+  return `${day} at ${time}`;
+}
+
 export type DueUrgency = "normal" | "soon" | "overdue";
 
 export type DueInfo = {

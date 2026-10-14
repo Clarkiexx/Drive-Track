@@ -3,12 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ClipboardList,
   House,
   LayoutGrid,
-  MessageCircleMore,
-  ScrollText,
-  Search,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,22 +23,24 @@ type BottomNavProps = {
    * the bar for a role other than the signed-in user's.
    */
   role?: Role;
+  /**
+   * "full" renders every tab for the role. "home" renders only the first and
+   * last tabs (Home + More for both roles) for home screens whose centered
+   * buttons already cover the rest.
+   */
+  variant?: "full" | "home";
 };
 
-/* Mirrors driver-app/src/navigation/MainTabNavigator.js — Home / Violations /
-   Chat — extended with a More tab for the secondary screens. Enforcers get the
-   field workflow the enforcer-app opens on. */
+/* Both roles get a slim two-tab bar — Home and More. The drivers' Violations
+   and Chat tabs and the enforcers' Search and Previous tabs used to live
+   here, but each lives on its home Quick Access grid and More hub instead. */
 const TABS: Record<Role, Tab[]> = {
   driver: [
     { label: "Home", href: "/home", Icon: House },
-    { label: "Violations", href: "/home/violations", Icon: ScrollText },
-    { label: "Chat", href: "/home/chat", Icon: MessageCircleMore },
     { label: "More", href: "/home/more", Icon: LayoutGrid },
   ],
   enforcer: [
     { label: "Home", href: "/enforcer", Icon: House },
-    { label: "Search", href: "/enforcer/search", Icon: Search },
-    { label: "Previous", href: "/enforcer/previous", Icon: ClipboardList },
     { label: "More", href: "/enforcer/more", Icon: LayoutGrid },
   ],
   // Admins work in the dashboard, which has its own sidebar — no bottom bar.
@@ -53,7 +51,7 @@ function matches(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export default function BottomNav({ role: roleProp }: BottomNavProps) {
+export default function BottomNav({ role: roleProp, variant = "full" }: BottomNavProps) {
   const pathname = usePathname() ?? "/";
   const { user, isLoading } = useAuth();
 
@@ -65,11 +63,15 @@ export default function BottomNav({ role: roleProp }: BottomNavProps) {
 
   // Signed out → no role yet; driver is the harmless placeholder (the admin
   // entry is empty, which used to render nothing and then pop in).
-  const tabs = TABS[roleProp ?? user?.role ?? "driver"];
+  const allTabs = TABS[roleProp ?? user?.role ?? "driver"];
+  const tabs =
+    variant === "home" && allTabs.length > 1
+      ? [allTabs[0], allTabs[allTabs.length - 1]]
+      : allTabs;
   if (tabs.length === 0) return null;
 
-  // Pick the most specific match so /home/violations lights up Violations
-  // rather than Home.
+  // Pick the most specific match so a nested page (e.g. /home/violations
+  // under the driver's Home tab) lights up its closest tab.
   let activeIndex = -1;
   let bestLength = -1;
   tabs.forEach((tab, index) => {

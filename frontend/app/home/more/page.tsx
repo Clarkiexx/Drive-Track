@@ -6,6 +6,7 @@ import {
   ChevronRight,
   GraduationCap,
   MessageCircleMore,
+  ScrollText,
   UserRound,
 } from "lucide-react";
 
@@ -14,12 +15,18 @@ import BottomNav from "@/components/common/BottomNav";
 import PageBody from "@/components/common/PageBody";
 
 /**
- * The driver screens that are not a tab of their own. BottomNav already links to
- * /home/more, so this hub is what keeps that fourth tab from being a dead end —
- * every destination below is reachable from here in one tap. Chat is a tab too,
- * but it is listed so the set is complete.
+ * The driver screens that are not a tab of their own. The bar below is only
+ * Home and More now — Violations and Chat moved to the home Quick Access
+ * grid — so this hub lists them alongside the rest: every destination below
+ * is reachable from here in one tap.
  */
 const DESTINATIONS = [
+  {
+    label: "My Violations",
+    href: "/home/violations",
+    Icon: ScrollText,
+    tile: "bg-danger-soft text-signal-stop",
+  },
   {
     label: "Violation Status",
     href: "/home/status",
@@ -53,8 +60,8 @@ export default function MorePage() {
 
       <PageBody>
         <p className="mt-4 text-[12.5px] leading-relaxed text-muted">
-          Everything else in DriveTrack. Your violations and chat stay one tap away on the bar
-          below.
+          Everything else in DriveTrack. Your violations and chat live on the Home hub —
+          this list keeps them one tap away too.
         </p>
 
         {/* One card, hairline-divided rows — the same list language the admin

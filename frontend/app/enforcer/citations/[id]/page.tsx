@@ -14,7 +14,7 @@ import {
   InfoRow,
   ViolationsBox,
 } from "@/components/common/CitationReceipt";
-import { formatDateTime, formatPeso } from "@/components/common/dates";
+import { formatDateTimeManila, formatPeso } from "@/components/common/dates";
 import NoticeBox from "@/components/common/NoticeBox";
 import PageBody from "@/components/common/PageBody";
 import useFocusRefresh from "@/components/common/useFocusRefresh";
@@ -323,7 +323,7 @@ function ReceiptCard({ citation, justFiled }: ReceiptCardProps) {
       {/* RN used 📅 and 📍 emoji here; InfoRow carries the same two as icons.
           The 👤 and 🚗 rows have no equivalent in InfoRow's icon set, so they
           stay plain, matching the driver-side receipt. */}
-      <InfoRow label="Date & Time" value={formatDateTime(citation.occurredAt)} icon="calendar" />
+      <InfoRow label="Date & Time" value={formatDateTimeManila(citation.occurredAt)} icon="calendar" />
       <InfoRow label="Location" value={citation.placeOfViolation} icon="map" />
       {citation.plateNumber ? (
         <InfoRow label="Plate Number" value={citation.plateNumber} />

@@ -70,7 +70,7 @@ export default function ChatbotScreen({ navigation }) {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.screen}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Home')}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
             <Text style={styles.backArrow}>←</Text>
           </TouchableOpacity>
           <View style={styles.botIcon}>

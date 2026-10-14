@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { formatPeso, formatShortDate, formatTime } from "@/components/common/dates";
+import { formatPeso, formatShortDateManila, formatTimeManila } from "@/components/common/dates";
 import EmptyState from "@/components/common/EmptyState";
 import NoticeBox from "@/components/common/NoticeBox";
 import StatusChip from "@/components/common/StatusChip";
@@ -147,7 +147,8 @@ export default function AdminDashboardPage() {
           </h2>
           <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-console-muted">
             Every figure below comes from the backend dashboard endpoints and the citation
-            register. Sections still being built are marked Planned in the sidebar.
+            register. Use the sidebar to manage drivers, officers, offences, violations,
+            settlements, broadcasts, and the audit trail.
           </p>
         </div>
 
@@ -506,10 +507,10 @@ function CitationsTable({ rows, failed }: { rows: CitationRecord[]; failed: bool
 
               <td className="px-5 py-3.5 align-top">
                 <p className="text-[13px] leading-tight text-ink/80">
-                  {formatShortDate(row.occurredAt)}
+                  {formatShortDateManila(row.occurredAt)}
                 </p>
                 <p className="tabular-nums mt-1 text-[11.5px] leading-none text-console-muted">
-                  {formatTime(row.occurredAt)}
+                  {formatTimeManila(row.occurredAt)}
                 </p>
               </td>
 

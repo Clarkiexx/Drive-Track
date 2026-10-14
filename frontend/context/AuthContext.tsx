@@ -19,11 +19,12 @@ import {
 } from "@/services/auth.service";
 import { homeForRole, type Role } from "@/constants/roles";
 import {
-  TOKEN_STORAGE_KEY,
-  USER_STORAGE_KEY,
   clearSession,
+  currentRole,
   getStoredToken,
+  getStoredUser,
   persistToken,
+  persistUser,
   registerUnauthorizedHandler,
   syncAuthCookie,
 } from "@/lib/axios";
@@ -37,7 +38,14 @@ import {
  *     Change Password screen (the backend still 403s every other call anyway),
  *   - any 401 signs the app out (lib/axios.ts 401 interceptor + this handler).
  *
- * The token is additionally mirrored into the `drivetrack_token` cookie so
+ * Concurrent sessions: each role owns independent storage keys
+ * (lib/axios.ts TOKEN_STORAGE_KEYS/USER_STORAGE_KEYS), and this tab hydrates
+ * ONLY the role its route prefix belongs to (/admin → admin, /home +
+ * driver auth flows → driver, /enforcer → enforcer; bare / and /login fall
+ * back to the most recently used role). One AuthContext instance still
+ * represents exactly one role — sibling tabs keep their own.
+ *
+ * Each role's token is additionally mirrored into a same-named cookie so
  * proxy.ts can guard routes server-side — the backend itself never sees it.
  */
 
@@ -91,35 +99,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
-  // Restore a previous session once, after hydration: localStorage can only be
-  // read on the client, and the restore commits state — so the work runs in a
-  // deferred callback rather than synchronously in the effect body
+  // Restore this tab's role session once, after hydration: localStorage can
+  // only be read on the client, and the restore commits state — so the work
+  // runs in a deferred callback rather than synchronously in the effect body
   // (react-hooks/set-state-in-effect). The initial render therefore always
   // matches the server (user=null, isLoading=true).
   useEffect(() => {
     const restoreSession = () => {
-      const storedToken = getStoredToken();
+      // This tab's role only — never another role's keys (that would let one
+      // tab impersonate another). Bare pages (/, /login) resolve via the
+      // most-recently-used role with a stored token.
+      const role = currentRole();
 
-      if (!storedToken) {
-        // No token but possibly a stale user/cookie left behind — clear both.
-        clearSession();
+      if (!role) {
         setIsLoading(false);
         return;
       }
 
-      let storedUser: AuthUser | null = null;
-      try {
-        const raw = localStorage.getItem(USER_STORAGE_KEY);
-        if (raw) storedUser = JSON.parse(raw) as AuthUser;
-      } catch {
-        localStorage.removeItem(USER_STORAGE_KEY);
+      const storedToken = getStoredToken(role);
+
+      if (!storedToken) {
+        // No token for THIS role, but possibly stale remnants of it left
+        // behind — clear only this role's slots, never sibling roles'.
+        clearSession(role);
+        setIsLoading(false);
+        return;
       }
+
+      let storedUser = getStoredUser<AuthUser>(role);
 
       if (!storedUser) storedUser = userFromToken(storedToken);
 
       if (storedUser) setUser(storedUser);
       setToken(storedToken);
-      syncAuthCookie(); // self-heal an expired mirror cookie
+      syncAuthCookie(role); // self-heal an expired mirror cookie
       setIsLoading(false);
     };
 
@@ -127,8 +140,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.clearTimeout(timer);
   }, []);
 
-  // 401 anywhere → drop the session (navigation back to /login is handled by
-  // the lib/axios.ts interceptor, mirroring the driver-app 401 handling).
+  // 401 for THIS tab's role clears its React state (the lib/axios.ts
+  // interceptor already cleared that role's storage; navigation back to
+  // /login is handled there too, mirroring the driver-app 401 handling).
+  // Sibling tabs run their own provider instance with their own role state.
   useEffect(() => {
     registerUnauthorizedHandler(() => {
       setUser(null);
@@ -138,8 +153,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const persistSession = useCallback((session: AuthSession) => {
-    persistToken(session.token);
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(session.user));
+    // The login role is explicit — the session lands ONLY in that role's
+    // slots, so signing in as an enforcer here cannot overwrite a driver
+    // session living in another tab.
+    const role = session.user.role;
+    persistToken(session.token, role);
+    persistUser(role, session.user);
     setUser(session.user);
     setToken(session.token);
   }, []);
@@ -168,30 +187,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
-    clearSession();
+    // Signs out ONLY this tab's role. Role comes from live state first (the
+    // common case), falling back to this tab's route prefix.
+    const role = user?.role ?? currentRole();
+    clearSession(role);
     setUser(null);
     setToken(null);
     router.replace("/login");
-  }, [router]);
+  }, [router, user?.role]);
 
   const clearMustChangePassword = useCallback(() => {
     setUser((current) => {
       if (!current || !current.mustChangePassword) return current;
       const next = { ...current, mustChangePassword: false };
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(next));
+      persistUser(current.role, next);
       return next;
     });
   }, []);
 
   const applyToken = useCallback(
     (nextToken: string) => {
-      persistToken(nextToken);
+      // Driver-only flow (POST /auth/driver/change-password): the fresh token
+      // replaces the token in the driver's slots only.
+      const role: Role = "driver";
+      persistToken(nextToken, role);
       setToken(nextToken);
       // The fresh JWT from change-password has mustChangePassword=false.
       setUser((current) => {
         if (!current) return userFromToken(nextToken);
         const next = { ...current, mustChangePassword: false };
-        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(next));
+        persistUser(current.role, next);
         return next;
       });
     },

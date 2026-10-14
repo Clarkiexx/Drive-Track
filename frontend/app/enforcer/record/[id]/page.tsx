@@ -9,7 +9,7 @@ import EmptyState from "@/components/common/EmptyState";
 import NoticeBox from "@/components/common/NoticeBox";
 import PageBody from "@/components/common/PageBody";
 import StatusChip from "@/components/common/StatusChip";
-import { formatPeso, formatShortDate, formatTime } from "@/components/common/dates";
+import { formatPeso, formatShortDateManila, formatTimeManila } from "@/components/common/dates";
 import { getApiErrorMessage } from "@/lib/axios";
 import type { CitationRecord } from "@/services/citation.service";
 import { driverService, type DriverRecord } from "@/services/driver.service";
@@ -237,7 +237,7 @@ function HistoryRow({ citation }: HistoryRowProps) {
 
         <p className="mt-1 flex items-center gap-1.5 text-[12px] text-muted">
           <CalendarDays size={12} strokeWidth={2.2} aria-hidden className="shrink-0" />
-          {formatShortDate(citation.occurredAt)} • {formatTime(citation.occurredAt)}
+          {formatShortDateManila(citation.occurredAt)} • {formatTimeManila(citation.occurredAt)}
         </p>
 
         <p className="mt-0.5 flex items-start gap-1.5 text-[12px] leading-snug text-muted">

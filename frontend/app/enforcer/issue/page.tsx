@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
 import ChipRow from "@/components/common/ChipRow";
+import DriverResultCard from "@/components/common/DriverResultCard";
 import EmptyState from "@/components/common/EmptyState";
 import EvidencePhotos, { type EvidencePhoto } from "@/components/common/EvidencePhotos";
 import FilterBar from "@/components/common/FilterBar";
@@ -26,7 +27,6 @@ import PageBody from "@/components/common/PageBody";
 import WizardFooter from "@/components/common/WizardFooter";
 import WizardProgress from "@/components/common/WizardProgress";
 import useClientNow from "@/components/common/useClientNow";
-import { formatPeso } from "@/components/common/dates";
 import { getApiErrorMessage } from "@/lib/axios";
 import useGeolocation from "@/lib/useGeolocation";
 import {
@@ -35,6 +35,7 @@ import {
 } from "@/services/citation.service";
 import { driverService, type DriverRecord } from "@/services/driver.service";
 import {
+  formatPenaltyRange,
   violationTypeService,
   type ViolationTypeRecord,
 } from "@/services/violation-type.service";
@@ -116,6 +117,42 @@ function IssueCitationWizard() {
 
   const [driver, setDriver] = useState<DriverRecord | null>(null);
   const [driverLoadError, setDriverLoadError] = useState("");
+
+  // Embedded license search for the no-driver guard below. Same service and
+  // privacy rule as /enforcer/search (license number only) — this only
+  // discovers the driver; selecting a hit links into the wizard's existing
+  // `?driverId=` resolution, so there is still exactly one driver-loading
+  // path and one submission flow.
+  const [searchLicense, setSearchLicense] = useState("");
+  const [searchResults, setSearchResults] = useState<DriverRecord[] | null>(null);
+  const [didSearch, setDidSearch] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+
+  async function handleEmbeddedSearch() {
+    setSearchError("");
+
+    if (!searchLicense.trim()) {
+      setSearchError(
+        "Enter the License No. from the physical license to search. Name search is disabled for privacy."
+      );
+      return;
+    }
+
+    setIsSearching(true);
+    setDidSearch(false);
+
+    try {
+      setSearchResults(
+        await driverService.searchDrivers({ licenseNumber: searchLicense.trim() })
+      );
+      setDidSearch(true);
+    } catch (error) {
+      setSearchError(getApiErrorMessage(error, "Search failed. Please try again."));
+    } finally {
+      setIsSearching(false);
+    }
+  }
 
   const [step, setStep] = useState(1);
   const [recordType, setRecordType] = useState<RecordTypeChoice>("citation");
@@ -381,7 +418,7 @@ function IssueCitationWizard() {
   function goBack() {
     setStepError("");
     if (step === 1) {
-      router.push("/enforcer/search");
+      router.push("/enforcer/search?mode=issueCitation");
       return;
     }
     setStep((current) => current - 1);
@@ -463,15 +500,104 @@ function IssueCitationWizard() {
 
     return (
       <>
-        <AppBar title="Issue Citation" backHref="/enforcer/search" />
+        <AppBar title="Issue Citation" backHref="/enforcer/search?mode=issueCitation" />
         <PageBody>
-          <EmptyState title="No driver selected.">
-            {driverLoadError || "Go back and search for a driver first."}
-          </EmptyState>
+          <div className="mt-6 text-center">
+            <h2 className="font-display text-[20px] font-semibold tracking-tight text-ink">
+              Search Driver
+            </h2>
+            <p className="mt-1 text-[13px] text-muted">
+              License No. only — protects driver privacy
+            </p>
+          </div>
+
+          {driverLoadError ? (
+            <div role="alert" className="mt-4">
+              <NoticeBox tone="danger" className="text-[13px]">
+                {driverLoadError}
+              </NoticeBox>
+            </div>
+          ) : null}
+
+          <section className="rise mt-5 rounded-[14px] border border-hairline bg-surface p-5">
+            <FormField
+              label="Driver's License Number"
+              required
+              placeholder="e.g. G-75-45-571924"
+              value={searchLicense}
+              onChange={(event) => setSearchLicense(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void handleEmbeddedSearch();
+              }}
+              autoCapitalize="characters"
+              autoComplete="off"
+            />
+
+            <p className="mt-2 text-[11px] leading-snug text-muted">
+              Enter the exact License No. from the physical license, then pick
+              the driver to start the citation.
+            </p>
+
+            {searchError ? (
+              <div role="alert" className="mt-3">
+                <NoticeBox tone="danger" className="text-[13px]">
+                  {searchError}
+                </NoticeBox>
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => void handleEmbeddedSearch()}
+              disabled={isSearching}
+              aria-busy={isSearching}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[10px] bg-brand-500 py-3.5 text-[15px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:opacity-60"
+            >
+              {isSearching ? (
+                <>
+                  <LoaderCircle size={16} strokeWidth={2.4} className="animate-spin" aria-hidden />
+                  Searching…
+                </>
+              ) : (
+                <>
+                  <Search size={16} strokeWidth={2.4} aria-hidden />
+                  Search Records
+                </>
+              )}
+            </button>
+          </section>
+
+          {didSearch && searchResults !== null ? (
+            searchResults.length > 0 ? (
+              <section className="mt-6">
+                <h3 className="mb-2.5 text-[13px] text-muted">
+                  {searchResults.length} result(s) found — pick a driver to continue
+                </h3>
+
+                <ul>
+                  {searchResults.map((hit) => (
+                    <li key={hit.driverId} className="mb-2.5">
+                      <DriverResultCard
+                        firstName={hit.firstName}
+                        lastName={hit.lastName}
+                        licenseNumber={hit.licenseNumber}
+                        href={`/enforcer/issue?driverId=${hit.driverId}`}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : (
+              <div className="mt-2">
+                <EmptyState title="No driver found for that search." />
+              </div>
+            )
+          ) : null}
+
           <button
             type="button"
-            onClick={() => router.push("/enforcer/search")}
-            className="mx-auto flex items-center gap-1.5 rounded-[10px] border border-hairline bg-surface px-5 py-3.5 text-[14px] font-semibold text-ink transition-colors hover:bg-surface-sunken"
+            onClick={() => router.push("/enforcer/search?mode=issueCitation")}
+            className="mx-auto mt-4 flex items-center gap-1.5 rounded-[10px] border border-hairline bg-surface px-5 py-3.5 text-[14px] font-semibold text-ink transition-colors hover:bg-surface-sunken"
           >
             ← Back to Search
           </button>
@@ -486,7 +612,7 @@ function IssueCitationWizard() {
 
   return (
     <>
-      <AppBar title="Issue Citation" backHref="/enforcer/search" />
+      <AppBar title="Issue Citation" backHref="/enforcer/search?mode=issueCitation" />
 
       <WizardProgress step={step} total={TOTAL_STEPS} labels={STEP_LABELS} />
 
@@ -604,7 +730,7 @@ function IssueCitationWizard() {
 function ResolvingDriver() {
   return (
     <>
-      <AppBar title="Issue Citation" backHref="/enforcer/search" />
+      <AppBar title="Issue Citation" backHref="/enforcer/search?mode=issueCitation" />
       <PageBody>
         <div
           role="status"
@@ -628,7 +754,7 @@ function ResolvingDriver() {
 function WizardSkeleton() {
   return (
     <>
-      <AppBar title="Issue Citation" backHref="/enforcer/search" />
+      <AppBar title="Issue Citation" backHref="/enforcer/search?mode=issueCitation" />
       <div aria-hidden className="px-5 pt-6">
         <div className="breathe h-3 w-32 rounded-full bg-surface-sunken" />
         <div className="breathe mt-3 h-10 w-full rounded-[10px] bg-surface-sunken" />
@@ -854,7 +980,7 @@ function StepViolationDetails({
               <OptionCard
                 selected={selectedIds.includes(violation.violationTypeId)}
                 onSelect={() => onToggle(violation.violationTypeId)}
-                trailing={formatPeso(violation.defaultPenalty)}
+                trailing={formatPenaltyRange(violation)}
               >
                 <span className="font-semibold">
                   {violation.articleSection} | {violation.description}

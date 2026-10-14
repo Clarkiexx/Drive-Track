@@ -4,7 +4,7 @@ import Link from "next/link";
 import { CalendarDays, ChevronRight, Clock, MapPin, ScrollText, TriangleAlert } from "lucide-react";
 
 import type { RecordType, SettlementStatus } from "@/constants/violations";
-import { dueInfo, formatPeso, formatShortDate, type DueUrgency } from "./dates";
+import { dueInfo, formatPeso, formatShortDate, formatShortDateManila, type DueUrgency } from "./dates";
 import useClientNow from "./useClientNow";
 import StatusChip from "./StatusChip";
 
@@ -110,7 +110,7 @@ export default function RecordCard({
 
       <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-muted">
         <CalendarDays size={13} strokeWidth={2} aria-hidden className="shrink-0" />
-        {formatShortDate(occurredAt)}
+        {formatShortDateManila(occurredAt)}
       </p>
       <p className="mt-1 flex items-start gap-1.5 text-[12px] text-muted">
         <MapPin size={13} strokeWidth={2} aria-hidden className="mt-px shrink-0" />

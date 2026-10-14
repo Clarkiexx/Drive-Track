@@ -9,7 +9,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import ForgotPasswordScreen from './src/screens/ForgotPasswordScreen';
 import ChangePasswordScreen from './src/screens/ChangePasswordScreen';
-import MainTabNavigator from './src/navigation/MainTabNavigator';
+import HomeStack from './src/navigation/HomeStack';
 import colors from './src/theme/colors';
 
 const Stack = createNativeStackNavigator();
@@ -18,7 +18,8 @@ const Stack = createNativeStackNavigator();
  * Routing logic:
  * - no token yet                    -> Login/Register/ForgotPassword stack
  * - token but must change password  -> forced ChangePassword screen, nothing else reachable
- * - token and password already set  -> main app (bottom tabs: Home/Violations/Chat)
+ * - token and password already set  -> main app (Home stack; violations and
+ *   chatbot live on the Home Quick Access grid, not as tabs)
  */
 function RootNavigator() {
   const { token, mustChangePassword, isLoading } = useAuth();
@@ -42,7 +43,7 @@ function RootNavigator() {
       ) : mustChangePassword ? (
         <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
       ) : (
-        <Stack.Screen name="MainTabs" component={MainTabNavigator} />
+        <Stack.Screen name="Main" component={HomeStack} />
       )}
     </Stack.Navigator>
   );

@@ -17,9 +17,11 @@ import { searchDrivers, quickCreateDriver } from '../api/driverApi';
 import colors from '../theme/colors';
 
 export default function DriverSearchScreen({ navigation, route }) {
-  // mode: 'issueCitation' navigates into the wizard after picking a driver;
-  // 'lookup' (from Home's "Search Driver") just shows the driver record.
-  const mode = route.params?.mode || 'issueCitation';
+  // mode: 'lookup' opens the picked driver's record (profile only — the
+  // standalone search never starts a citation); 'issueCitation' navigates
+  // into the wizard after picking. Standalone entries pass nothing, so the
+  // default is lookup; only the citation flow passes 'issueCitation'.
+  const mode = route.params?.mode || 'lookup';
 
   const [licenseNumber, setLicenseNumber] = useState('');
   const [results, setResults] = useState(null);
@@ -117,11 +119,12 @@ export default function DriverSearchScreen({ navigation, route }) {
         {searched && results && results.length === 0 && (
           <View style={styles.noResults}>
             <Text style={styles.noResultsText}>No driver found for that search.</Text>
-            {mode === 'issueCitation' && (
-              <TouchableOpacity style={styles.quickCreateLink} onPress={() => setShowQuickCreate(true)}>
-                <Text style={styles.quickCreateLinkText}>+ Create a new driver record</Text>
-              </TouchableOpacity>
-            )}
+            {/* Quick-create on a miss in both modes — lookup opens the new
+                record, citation mode continues into the wizard (both via
+                handleSelectDriver). */}
+            <TouchableOpacity style={styles.quickCreateLink} onPress={() => setShowQuickCreate(true)}>
+              <Text style={styles.quickCreateLinkText}>+ Create a new driver record</Text>
+            </TouchableOpacity>
           </View>
         )}
 

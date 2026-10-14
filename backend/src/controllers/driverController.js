@@ -1,4 +1,6 @@
 const bcrypt = require('bcrypt');
+const fs = require('fs');
+const path = require('path');
 const { validationResult } = require('express-validator');
 const { prisma, prismaErrorToHttp, toDateOnlyString } = require('../lib/prisma');
 const { normalizeUsername, buildUsername } = require('../utils/username');
@@ -20,7 +22,7 @@ function handleValidation(req, res) {
 
 /**
  * Response shape for a driver: passwordHash never leaves the server (the old
- * `attributes: { exclude: ['passwordHash'] }`), and the two @db.Date columns
+ * `attributes: { exclude: ['passwordHash'] }`), and the @db.Date columns
  * are rendered as `YYYY-MM-DD` — the exact format Sequelize DATEONLY sent to
  * clients, since Prisma otherwise serializes them as full ISO timestamps.
  * Prisma Decimal columns keep serializing to strings, same as mysql2 did
@@ -30,6 +32,7 @@ function toDriverWire(driver) {
   const { passwordHash: _omit, ...rest } = driver;
   if (rest.dateOfBirth) rest.dateOfBirth = toDateOnlyString(rest.dateOfBirth);
   if (rest.expirationDate) rest.expirationDate = toDateOnlyString(rest.expirationDate);
+  if (rest.issueDate) rest.issueDate = toDateOnlyString(rest.issueDate);
   return rest;
 }
 
@@ -144,7 +147,7 @@ async function createDriver(req, res, next) {
     if (!handleValidation(req, res)) return;
 
     const { firstName, lastName, licenseNumber, middleInitial, address, contactNumber,
-      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, agencyCode,
+      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, issueDate, agencyCode,
       bloodType, eyeColor, dlCodes, condition } = req.body;
 
     const existing = await prisma.driver.findFirst({
@@ -197,6 +200,7 @@ async function createDriver(req, res, next) {
         weightKg: weightKg || null,
         heightM: heightM || null,
         expirationDate: expirationDate || null,
+        issueDate: issueDate || null,
         agencyCode: agencyCode || null,
         bloodType: bloodType || null,
         eyeColor: eyeColor || null,
@@ -236,7 +240,7 @@ async function updateDriver(req, res, next) {
     if (!driver) return fail(res, 'Driver not found', 404);
 
     const { firstName, middleInitial, lastName, address, contactNumber,
-      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, agencyCode,
+      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, issueDate, agencyCode,
       bloodType, eyeColor, dlCodes, condition } = req.body;
 
     const data = {};
@@ -251,6 +255,7 @@ async function updateDriver(req, res, next) {
     if (weightKg !== undefined) data.weightKg = weightKg;
     if (heightM !== undefined) data.heightM = heightM;
     if (expirationDate !== undefined) data.expirationDate = expirationDate;
+    if (issueDate !== undefined) data.issueDate = issueDate;
     if (agencyCode !== undefined) data.agencyCode = agencyCode;
     if (bloodType !== undefined) data.bloodType = bloodType;
     if (eyeColor !== undefined) data.eyeColor = eyeColor;
@@ -278,6 +283,90 @@ async function updateDriver(req, res, next) {
         409
       );
     }
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * PATCH /drivers/me — the signed-in driver updates their own profile
+ * (My Profile). Same editable fields as the admin updateDriver above, minus
+ * everything identity- or verification-related: licenseNumber, verification
+ * status, and license documents stay admin-owned. The login username tracks
+ * the name columns, so it is rebuilt from the merged values exactly as the
+ * admin path does — a rename changes what the next login must match.
+ *
+ * No audit-log row: logAdminAction needs an admin actor and a self-update
+ * has none; the updated_at timestamp on the row is the trail.
+ */
+async function updateDriverMe(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+
+    const driverId = Number(req.user.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
+    if (!driver) return fail(res, 'Driver not found', 404);
+
+    const { firstName, middleInitial, lastName, address, contactNumber } = req.body;
+
+    const data = {};
+    if (firstName !== undefined) data.firstName = firstName;
+    if (middleInitial !== undefined) data.middleInitial = middleInitial;
+    if (lastName !== undefined) data.lastName = lastName;
+    if (address !== undefined) data.address = address || null;
+    if (contactNumber !== undefined) data.contactNumber = contactNumber || null;
+
+    data.username = buildUsername(
+      data.firstName !== undefined ? data.firstName : driver.firstName,
+      data.middleInitial !== undefined ? data.middleInitial : driver.middleInitial,
+      data.lastName !== undefined ? data.lastName : driver.lastName
+    );
+
+    const updated = await prisma.driver.update({ where: { driverId }, data });
+    return success(res, toDriverWire(updated), 'Profile updated');
+  } catch (err) {
+    if (isUniqueViolationOn(err, 'username')) {
+      return fail(
+        res,
+        'Another driver already uses this full name. Verify the name spelling against the physical license.',
+        409
+      );
+    }
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * PATCH /drivers/me/photo — the signed-in driver uploads or replaces their
+ * profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB, stored under
+ * /uploads/avatars/ and served publicly like evidence photos). The previous
+ * avatar file is removed best-effort; license photos are never touched —
+ * they are verification evidence, not display images.
+ */
+async function updateDriverPhotoMe(req, res, next) {
+  try {
+    if (!req.file) return fail(res, 'A photo file is required', 422);
+
+    const driverId = Number(req.user.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
+    if (!driver) return fail(res, 'Driver not found', 404);
+
+    const photoPath = `/uploads/avatars/${req.file.filename}`;
+    const previous = driver.profilePhotoPath;
+    if (previous && previous.startsWith('/uploads/avatars/')) {
+      const absolute = path.join(__dirname, '..', '..', previous);
+      fs.promises.unlink(absolute).catch(() => {});
+    }
+
+    const updated = await prisma.driver.update({
+      where: { driverId },
+      data: { profilePhotoPath: photoPath },
+    });
+    return success(res, toDriverWire(updated), 'Profile photo updated');
+  } catch (err) {
     return respondWithMappedError(res, next, err);
   }
 }
@@ -370,6 +459,8 @@ module.exports = {
   getDriver,
   createDriver,
   updateDriver,
+  updateDriverMe,
+  updateDriverPhotoMe,
   updateDriverStatus,
   deleteDriver,
   searchDrivers,

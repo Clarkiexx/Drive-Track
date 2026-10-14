@@ -1,5 +1,7 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { validationResult } = require('express-validator');
 const { prisma, prismaErrorToHttp } = require('../lib/prisma');
 const { success, fail } = require('../utils/response');
@@ -192,6 +194,77 @@ async function updateEnforcer(req, res, next) {
   }
 }
 
+/**
+ * PATCH /enforcers/me — the signed-in enforcer updates their own profile
+ * (My Profile). Identity and assignment stay admin-owned: employeeId,
+ * badgeNumber, station, and status are not accepted here, only the
+ * personal fields firstName, lastName, address, and contactNumber.
+ *
+ * No audit-log row: logAdminAction needs an admin actor and a self-update
+ * has none; the updated_at timestamp on the row is the trail.
+ */
+async function updateEnforcerMe(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+
+    const enforcerId = Number(req.user.id);
+    const existing = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!existing) return fail(res, 'Enforcer not found', 404);
+
+    const { firstName, lastName, address, contactNumber } = req.body;
+
+    const data = {};
+    if (firstName !== undefined) data.firstName = firstName;
+    if (lastName !== undefined) data.lastName = lastName;
+    if (address !== undefined) data.address = address || null;
+    if (contactNumber !== undefined) data.contactNumber = contactNumber || null;
+
+    const enforcer = await prisma.enforcer.update({ where: { enforcerId }, data });
+
+    const { passwordHash: _omit, ...safeEnforcer } = enforcer;
+    return success(res, safeEnforcer, 'Profile updated');
+  } catch (err) {
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * PATCH /enforcers/me/photo — the signed-in enforcer uploads or replaces
+ * their profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB, stored
+ * under /uploads/avatars/ and served publicly like evidence photos). The
+ * previous avatar file is removed best-effort.
+ */
+async function updateEnforcerPhotoMe(req, res, next) {
+  try {
+    if (!req.file) return fail(res, 'A photo file is required', 422);
+
+    const enforcerId = Number(req.user.id);
+    const existing = Number.isInteger(enforcerId)
+      ? await prisma.enforcer.findUnique({ where: { enforcerId } })
+      : null;
+    if (!existing) return fail(res, 'Enforcer not found', 404);
+
+    const photoPath = `/uploads/avatars/${req.file.filename}`;
+    const previous = existing.profilePhotoPath;
+    if (previous && previous.startsWith('/uploads/avatars/')) {
+      const absolute = path.join(__dirname, '..', '..', previous);
+      fs.promises.unlink(absolute).catch(() => {});
+    }
+
+    const enforcer = await prisma.enforcer.update({
+      where: { enforcerId },
+      data: { profilePhotoPath: photoPath },
+    });
+
+    const { passwordHash: _omit, ...safeEnforcer } = enforcer;
+    return success(res, safeEnforcer, 'Profile photo updated');
+  } catch (err) {
+    return respondWithMappedError(res, next, err);
+  }
+}
+
 /** PATCH /enforcers/:id/status — active / on_leave / suspended / archived.
  *  Archived keeps the record for transparency but hides it by default. */
 async function updateEnforcerStatus(req, res, next) {
@@ -270,6 +343,8 @@ module.exports = {
   getEnforcer,
   createEnforcer,
   updateEnforcer,
+  updateEnforcerMe,
+  updateEnforcerPhotoMe,
   updateEnforcerStatus,
   resetEnforcerPassword,
   deleteEnforcer,

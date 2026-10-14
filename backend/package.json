@@ -16,6 +16,7 @@
     "seed:violation-types": "tsx seed-violation-types.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-pg": "7.7.0",
     "@prisma/client": "7.8.0",
     "bcrypt": "^5.1.1",

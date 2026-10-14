@@ -1,49 +1,11 @@
 const { success, fail } = require('../utils/response');
+const retrievalService = require('../services/retrievalService');
+const llmService = require('../services/llmService');
 
-// Simple keyword-matched FAQ responses — deliberately not an LLM
-// integration, since a rule-based matcher is simpler to build, easier to
-// defend in a capstone review, and fully predictable for a fixed set of
-// common questions like these.
-const FAQ_RULES = [
-  {
-    keywords: ['settle', 'pay', 'payment', 'bayad'],
-    answer:
-      'You can settle violations at the CTMO office (Cordova Municipal Hall, Mon–Fri 8AM–5PM) — bring your citation number. Open "My Violations" to see amounts and due dates, then tap a citation for details.',
-  },
-  {
-    keywords: ['office', 'address', 'location', 'where', 'saan', 'asa'],
-    answer: 'The CTMO office is located at Cordova Municipal Hall, Cordova, Cebu. Office hours are Monday to Friday, 8:00 AM to 5:00 PM.',
-  },
-  {
-    keywords: ['penalt', 'fine', 'fee', 'cost', 'how much', 'multa'],
-    answer:
-      'Penalty amounts vary by violation type. You can see the exact fine for each of your citations under "My Violations" in the app.',
-  },
-  {
-    keywords: ['appeal', 'protest', 'contest', 'dispute', 'reklamo'],
-    answer:
-      'If you wish to appeal a citation, please visit the CTMO office in person within 15 days of issuance and bring a valid ID along with your citation number.',
-  },
-  {
-    keywords: ['warning'],
-    answer: 'A warning is a formal notice for a minor violation. It does not carry a fine but is recorded on your driving history.',
-  },
-  {
-    keywords: ['overdue', 'late', 'due'],
-    answer:
-      'Citations not settled by their due date are marked overdue and may carry additional penalties per CTMO policy. Please settle as soon as possible to avoid this.',
-  },
-  {
-    keywords: ['license', 'lisensya', 'verify', 'verified', 'verification'],
-    answer:
-      'New accounts stay Pending until an admin verifies your license photo. You can still log in, but full access unlocks after verification — usually within 1–2 working days.',
-  },
-  {
-    keywords: ['hello', 'hi', 'hey', 'kumusta', 'good morning', 'good afternoon'],
-    answer:
-      'Hello! I can help with settling violations, office location, penalties, appeals, warnings, and account verification. What do you need?',
-  },
-];
+// Boot note only — never per-message. Chat is stateless in Phase 1 and
+// message content is never logged anywhere in this pipeline.
+// eslint-disable-next-line no-console
+if (!llmService.isConfigured()) console.warn('[chatbot] RAG generative answers disabled: LLM_API_KEY is not set. Curated passages only.');
 
 const DEFAULT_ANSWER =
   "I'm not sure how to help with that specific question yet. For anything not covered here, please visit the CTMO office or call our hotline during office hours.";
@@ -55,20 +17,87 @@ const QUICK_QUESTIONS = [
   'How to appeal?',
 ];
 
-/** POST /chatbot/ask — { message: string } */
-function ask(req, res) {
+/**
+ * Verifiable source reference for a passage: title + issuing authority +
+ * locator, matching the approved knowledge metadata. No URLs or PII.
+ */
+function toSource(passage) {
+  return {
+    title: passage.title || 'CTMO guidance',
+    authority: passage.authority || 'CTMO',
+    locator: passage.locator || '',
+  };
+}
+
+/**
+ * POST /chatbot/ask — { message: string }.
+ *
+ * Phase 1 RAG pipeline (all approved content, no personal data, stateless):
+ *   1. Fast path — the pre-RAG keyword match answers verbatim (byte-identical
+ *      legacy behavior) plus verifiable sources.
+ *   2. Retrieval + sufficiency gate — a relevant non-legacy match answers
+ *      from its curated passage; below the floor, the default answer.
+ *   3. Generative zone — structural only until LLM credentials exist (the
+ *      reported Phase 1 blocker): with a provider configured, generation
+ *      runs grounded on the ranked passages; any generative failure degrades
+ *      to curated passages, never a 500 — a chat answer falls back, it does
+ *      not fail the request.
+ */
+async function ask(req, res) {
   const { message } = req.body;
   if (!message || !message.trim()) {
     return fail(res, 'A message is required', 422);
   }
 
-  const normalized = message.toLowerCase();
-  const matched = FAQ_RULES.find((rule) => rule.keywords.some((kw) => normalized.includes(kw)));
+  const legacy = retrievalService.findLegacyMatch(message);
+  if (legacy) {
+    return success(
+      res,
+      {
+        answer: legacy.text,
+        quickQuestions: QUICK_QUESTIONS,
+        sources: [toSource(legacy)],
+      }
+    );
+  }
 
-  return success(res, {
-    answer: matched ? matched.answer : DEFAULT_ANSWER,
-    quickQuestions: QUICK_QUESTIONS,
-  });
+  const { ranked, sufficient } = retrievalService.retrieve(message);
+  if (!sufficient) {
+    return success(
+      res,
+      { answer: DEFAULT_ANSWER, quickQuestions: QUICK_QUESTIONS, sources: [] }
+    );
+  }
+
+  if (llmService.isConfigured()) {
+    try {
+      const generated = await llmService.generate({
+        question: message,
+        passages: ranked,
+        key: `driver:${req.user.id}`,
+      });
+      return success(
+        res,
+        {
+          answer: generated.answer,
+          quickQuestions: QUICK_QUESTIONS,
+          sources: ranked.map(({ passage }) => toSource(passage)),
+        }
+      );
+    } catch {
+      // Fall through to the curated fallback below.
+    }
+  }
+
+  const top = ranked[0];
+  return success(
+    res,
+    {
+      answer: top.passage.text,
+      quickQuestions: QUICK_QUESTIONS,
+      sources: ranked.map(({ passage }) => toSource(passage)),
+    }
+  );
 }
 
 module.exports = { ask };

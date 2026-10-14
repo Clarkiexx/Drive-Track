@@ -87,6 +87,18 @@ export interface CitationListParams {
   underProtest?: boolean;
 }
 
+export interface CitationPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface CitationPage {
+  citations: CitationRecord[];
+  pagination: CitationPagination;
+}
+
 export interface CitationCreatePayload {
   driverId: number | string;
   recordType?: "citation" | "warning";
@@ -152,6 +164,28 @@ export const citationService = {
   listAllCitations: async (params: CitationListParams = {}): Promise<CitationRecord[]> => {
     const res = await api.get<ApiEnvelope<unknown>>("/citations", { params });
     return unwrapList<CitationRecord>(res.data?.data, "citations");
+  },
+
+  /**
+   * GET /citations — paged variant for the admin Violations register.
+   * Same endpoint as listAllCitations, but preserves the backend's
+   * `{ citations, pagination }` shape so the table can page. listAllCitations
+   * is left untouched for existing callers (dashboard recent list).
+   */
+  listCitationsPage: async (params: CitationListParams = {}): Promise<CitationPage> => {
+    const res = await api.get<ApiEnvelope<unknown>>("/citations", { params });
+    const data = res.data?.data as
+      | { citations?: CitationRecord[]; pagination?: CitationPagination }
+      | undefined;
+    return {
+      citations: Array.isArray(data?.citations) ? data.citations : [],
+      pagination: {
+        page: Number(data?.pagination?.page) || Number(params.page) || 1,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 10,
+        total: Number(data?.pagination?.total) || 0,
+        totalPages: Number(data?.pagination?.totalPages) || 0,
+      },
+    };
   },
 
   /** GET /citations/:id — driver, enforcer or admin. */

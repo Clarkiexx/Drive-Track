@@ -3,8 +3,35 @@ const { body } = require('express-validator');
 const enforcerController = require('../controllers/enforcerController');
 const authenticate = require('../middleware/auth');
 const allowRoles = require('../middleware/role');
+const uploadAvatar = require('../middleware/uploadAvatar');
 
 const router = express.Router();
+
+// My Profile self-service for the signed-in enforcer. Registered ABOVE the
+// admin-only gate below: router.use() applies only to routes registered
+// after it, so these two stay enforcer-accessible while everything else
+// remains admin-only. Identity fields (employeeId, badgeNumber, station,
+// status) are not accepted here — see updateEnforcerMe.
+router.patch(
+  '/me',
+  authenticate,
+  allowRoles('enforcer'),
+  [
+    body('firstName').optional().trim().notEmpty().withMessage('First name is required'),
+    body('lastName').optional().trim().notEmpty().withMessage('Last name is required'),
+    body('address').optional({ checkFalsy: true }).trim(),
+    body('contactNumber').optional({ checkFalsy: true }).trim(),
+  ],
+  enforcerController.updateEnforcerMe
+);
+
+router.patch(
+  '/me/photo',
+  authenticate,
+  allowRoles('enforcer'),
+  uploadAvatar.single('photo'),
+  enforcerController.updateEnforcerPhotoMe
+);
 
 router.use(authenticate, allowRoles('admin'));
 

@@ -7,6 +7,7 @@ import {
   ClipboardList,
   LogOut,
   ScanSearch,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 
@@ -18,13 +19,12 @@ import { useAuth } from "@/context/AuthContext";
 /**
  * The enforcer More hub — the counterpart to app/home/more/page.tsx, and the
  * same pattern: an AppBar, a one-line explanation, then one card of
- * hairline-divided rows. BottomNav already links /enforcer/more as its fourth
- * tab, so without this screen that tab is a dead end.
+ * hairline-divided rows. The bottom bar is only Home and More (like the
+ * driver side), so this hub is how officers reach Search, Previous
+ * Citations, and the rest.
  *
- * What it lists is exactly what exists in the enforcer tree. "My Profile" from
- * the RN quick-actions grid is NOT here: /enforcer/profile is not part of this
- * migration, and a row that lands on a 404 is worse than a missing row. Add it
- * the day the profile screen lands.
+ * What it lists is exactly what exists in the enforcer tree, including
+ * /enforcer/profile (the port of the RN Profile screen).
  */
 const DESTINATIONS: { label: string; href: string; Icon: LucideIcon; tile: string }[] = [
   {
@@ -51,6 +51,12 @@ const DESTINATIONS: { label: string; href: string; Icon: LucideIcon; tile: strin
     Icon: Bell,
     tile: "bg-warn-soft text-signal-hold",
   },
+  {
+    label: "My Profile",
+    href: "/enforcer/profile",
+    Icon: UserRound,
+    tile: "bg-brand-soft text-brand-600",
+  },
 ];
 
 export default function EnforcerMorePage() {
@@ -62,8 +68,8 @@ export default function EnforcerMorePage() {
 
       <PageBody>
         <p className="mt-4 text-[12.5px] leading-relaxed text-muted">
-          Everything else in DriveTrack. Home, Search Driver and Previous Citations stay one tap away
-          on the bar below.
+          Everything else in DriveTrack. Search Driver and Previous Citations live here
+          and on the Home hub.
         </p>
 
         {/* One card, hairline-divided rows — the same list language the driver

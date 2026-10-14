@@ -61,7 +61,13 @@ export default function LearningCenterPage() {
             >
               {/* 48px plate, same as the RN signShapeWrap. */}
               <span className="grid size-12 shrink-0 place-items-center">
-                <SignShape shape={sign.shape} color={sign.color} />
+                <SignShape
+                  shape={sign.shape}
+                  color={sign.color}
+                  glyph={sign.glyph}
+                  prohibited={sign.prohibited}
+                  solid={sign.solid}
+                />
               </span>
 
               <div className="min-w-0 flex-1">

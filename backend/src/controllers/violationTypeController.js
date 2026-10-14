@@ -24,6 +24,28 @@ function parseId(value) {
 }
 
 /**
+ * Legal-range guard for the displayed penalty band: when a min/max band is
+ * present, min must not exceed max and the charged default must sit inside
+ * it. Values may arrive as strings (multipart/JSON) — compare numerically.
+ * Returns a message or null. `def` is the merged default (body or existing).
+ */
+function penaltyRangeError({ min, max, def }) {
+  const hasMin = min !== undefined && min !== null && min !== '';
+  const hasMax = max !== undefined && max !== null && max !== '';
+  const hasDef = def !== undefined && def !== null && def !== '';
+  if (hasMin && hasMax && Number(min) > Number(max)) {
+    return 'Minimum penalty cannot exceed maximum penalty';
+  }
+  if (hasMin && hasDef && Number(def) < Number(min)) {
+    return 'Default penalty cannot be below the minimum penalty';
+  }
+  if (hasMax && hasDef && Number(def) > Number(max)) {
+    return 'Default penalty cannot exceed the maximum penalty';
+  }
+  return null;
+}
+
+/**
  * GET /violation-types?active=true
  * All authenticated roles can read this list. Admin's management page
  * requests the full list (including inactive); the Enforcer's Issue
@@ -50,7 +72,10 @@ async function createViolationType(req, res, next) {
   try {
     if (!handleValidation(req, res)) return;
 
-    const { articleSection, description, category, defaultPenalty } = req.body;
+    const { articleSection, description, category, defaultPenalty, minPenalty, maxPenalty } = req.body;
+
+    const rangeError = penaltyRangeError({ min: minPenalty, max: maxPenalty, def: defaultPenalty });
+    if (rangeError) return fail(res, rangeError, 422);
 
     const violationType = await prisma.violationType.create({
       data: {
@@ -58,6 +83,8 @@ async function createViolationType(req, res, next) {
         description,
         category,
         defaultPenalty,
+        minPenalty: minPenalty ?? null,
+        maxPenalty: maxPenalty ?? null,
         isActive: true,
       },
     });
@@ -78,12 +105,23 @@ async function updateViolationType(req, res, next) {
       violationTypeId === null ? null : await prisma.violationType.findUnique({ where: { violationTypeId } });
     if (!existing) return fail(res, 'Violation type not found', 404);
 
-    const { articleSection, description, category, defaultPenalty } = req.body;
+    const { articleSection, description, category, defaultPenalty, minPenalty, maxPenalty } = req.body;
     const data = {};
     if (articleSection !== undefined) data.articleSection = articleSection;
     if (description !== undefined) data.description = description;
     if (category !== undefined) data.category = category;
     if (defaultPenalty !== undefined) data.defaultPenalty = defaultPenalty;
+    if (minPenalty !== undefined) data.minPenalty = minPenalty;
+    if (maxPenalty !== undefined) data.maxPenalty = maxPenalty;
+
+    // Range check runs against merged (post-patch) values so a default-only
+    // edit on a ranged row — or a range-only edit — is still validated.
+    const rangeError = penaltyRangeError({
+      min: data.minPenalty !== undefined ? data.minPenalty : existing.minPenalty,
+      max: data.maxPenalty !== undefined ? data.maxPenalty : existing.maxPenalty,
+      def: data.defaultPenalty !== undefined ? data.defaultPenalty : existing.defaultPenalty,
+    });
+    if (rangeError) return fail(res, rangeError, 422);
 
     // Sequelize's save() skipped the query when nothing was dirty — mirror
     // that instead of sending an empty UPDATE.

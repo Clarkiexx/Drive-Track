@@ -20,6 +20,8 @@ export interface EnforcerRecord {
   address?: string | null;
   contactNumber?: string | null;
   status?: EnforcerStatus;
+  /** Added by GET /enforcers list (bulk-counted per page, not stored). */
+  citationsIssued?: number;
 }
 
 export interface EnforcerListParams {
@@ -49,6 +51,30 @@ export const enforcerService = {
   listEnforcers: async (params: EnforcerListParams = {}): Promise<EnforcerRecord[]> => {
     const res = await api.get<ApiEnvelope<unknown>>("/enforcers", { params });
     return unwrapList<EnforcerRecord>(res.data?.data, "enforcers");
+  },
+
+  /**
+   * GET /enforcers — paged variant for the admin Enforcers register.
+   * Same endpoint as listEnforcers, but preserves the backend's
+   * `{ enforcers, pagination }` shape so the table can page. listEnforcers
+   * is left untouched for existing callers.
+   */
+  listEnforcersPage: async (
+    params: EnforcerListParams = {}
+  ): Promise<{ enforcers: EnforcerRecord[]; pagination: { page: number; limit: number; total: number; totalPages: number } }> => {
+    const res = await api.get<ApiEnvelope<unknown>>("/enforcers", { params });
+    const data = res.data?.data as
+      | { enforcers?: EnforcerRecord[]; pagination?: { page: number; limit: number; total: number; totalPages: number } }
+      | undefined;
+    return {
+      enforcers: Array.isArray(data?.enforcers) ? data.enforcers : [],
+      pagination: {
+        page: Number(data?.pagination?.page) || Number(params.page) || 1,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 10,
+        total: Number(data?.pagination?.total) || 0,
+        totalPages: Number(data?.pagination?.totalPages) || 0,
+      },
+    };
   },
 
   /** GET /enforcers/:id */

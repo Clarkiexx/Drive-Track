@@ -17,17 +17,93 @@ export interface ViolationTypeRecord {
   description: string;
   category: ViolationCategory;
   defaultPenalty: string | number;
+  minPenalty?: string | number | null;
+  maxPenalty?: string | number | null;
   isActive?: boolean;
 }
 
-export const violationTypeCreateSchema = z.object({
-  articleSection: z.string().trim().min(1, "Article/Section is required"),
-  description: z.string().trim().min(1, "Description is required"),
-  category: z.enum(VIOLATION_CATEGORIES, { message: "Category must be moving or non_moving" }),
-  defaultPenalty: z.coerce
-    .number({ message: "Default penalty must be a positive number" })
-    .min(0, "Default penalty must be a positive number"),
-});
+/** Displayed legal band: "₱min – ₱max" when a real range exists, else single. */
+export function hasPenaltyRange(row: Pick<ViolationTypeRecord, "minPenalty" | "maxPenalty">): boolean {
+  return (
+    row.minPenalty !== null &&
+    row.minPenalty !== undefined &&
+    row.minPenalty !== "" &&
+    row.maxPenalty !== null &&
+    row.maxPenalty !== undefined &&
+    row.maxPenalty !== "" &&
+    Number(row.minPenalty) !== Number(row.maxPenalty)
+  );
+}
+
+/**
+ * Penalty cell text mirroring formatPeso ("₱" + en-US thousands): the
+ * "₱min – ₱max" band when a real range exists, otherwise the single
+ * charged default. Same shape the reference table uses.
+ */
+export function formatPenaltyRange(
+  row: Pick<ViolationTypeRecord, "defaultPenalty" | "minPenalty" | "maxPenalty">
+): string {
+  const peso = (value: string | number): string => {
+    const numeric = Number(value);
+    return `₱${Number.isFinite(numeric) ? numeric.toLocaleString("en-US") : 0}`;
+  };
+  if (hasPenaltyRange(row)) {
+    return `${peso(row.minPenalty as string | number)} – ${peso(row.maxPenalty as string | number)}`;
+  }
+  return peso(row.defaultPenalty);
+}
+
+const penaltyNumber = (message: string) =>
+  z.coerce.number({ message }).min(0, message);
+
+const isRangeValid = (value: {
+    defaultPenalty?: number;
+    minPenalty?: number | null;
+    maxPenalty?: number | null;
+  }) => {
+    const { defaultPenalty, minPenalty, maxPenalty } = value;
+    if (
+      minPenalty !== undefined &&
+      minPenalty !== null &&
+      maxPenalty !== undefined &&
+      maxPenalty !== null &&
+      minPenalty > maxPenalty
+    ) {
+      return false;
+    }
+    if (
+      defaultPenalty !== undefined &&
+      minPenalty !== undefined &&
+      minPenalty !== null &&
+      defaultPenalty < minPenalty
+    ) {
+      return false;
+    }
+    if (
+      defaultPenalty !== undefined &&
+      maxPenalty !== undefined &&
+      maxPenalty !== null &&
+      defaultPenalty > maxPenalty
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+export const violationTypeCreateSchema = z
+  .object({
+    articleSection: z.string().trim().min(1, "Article/Section is required"),
+    description: z.string().trim().min(1, "Description is required"),
+    category: z.enum(VIOLATION_CATEGORIES, { message: "Category must be moving or non_moving" }),
+    defaultPenalty: z.coerce
+      .number({ message: "Default penalty must be a positive number" })
+      .min(0, "Default penalty must be a positive number"),
+    minPenalty: penaltyNumber("Minimum penalty must be a positive number").optional(),
+    maxPenalty: penaltyNumber("Maximum penalty must be a positive number").optional(),
+  })
+  .refine(isRangeValid, {
+    message: "Minimum cannot exceed maximum, and the default must sit inside the range",
+  });
 export type ViolationTypeCreateInput = z.infer<typeof violationTypeCreateSchema>;
 
 /** Partial form of the same fields (PATCH validates only what is sent). */
@@ -37,8 +113,13 @@ export const violationTypeUpdateSchema = z
     description: z.string().trim().min(1, "Description cannot be empty"),
     category: z.enum(VIOLATION_CATEGORIES, { message: "Category must be moving or non_moving" }),
     defaultPenalty: z.coerce.number().min(0, "Default penalty must be a positive number"),
+    minPenalty: penaltyNumber("Minimum penalty must be a positive number").optional(),
+    maxPenalty: penaltyNumber("Maximum penalty must be a positive number").optional(),
   })
-  .partial();
+  .partial()
+  .refine(isRangeValid, {
+    message: "Minimum cannot exceed maximum, and the default must sit inside the range",
+  });
 export type ViolationTypeUpdateInput = z.infer<typeof violationTypeUpdateSchema>;
 
 export const violationTypeService = {

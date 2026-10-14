@@ -64,7 +64,10 @@ function prismaErrorToHttp(err) {
     // Validation / value-conversion failures map onto the old
     // SequelizeValidationError branch (422 "Validation failed").
     // Prisma's message can quote raw query params, so it is logged upstream
-    // rather than echoed back to the client.
+    // rather than echoed back to the client. The terminal log below is the
+    // diagnostic trail: it names the rejecting field/value during testing.
+    // eslint-disable-next-line no-console
+    console.warn(`[prisma] value rejected (${code || name}):`, err.message);
     return { status: 422, message: 'Validation failed', errors: null };
   }
 

@@ -5,15 +5,25 @@ import { homeForRole, isRole } from "./constants/roles";
  * Route gate for the unified DriveTrack PWA (Next 16 file convention — the
  * `middleware.ts` name is deprecated; this file must export `proxy`).
  *
- * The backend has no http-only session cookie, so the client mirrors the JWT
- * into the `drivetrack_token` cookie purely for this check (see
- * lib/axios.ts persistToken). Cookie presence is a navigation gate only —
- * every API call still carries `Authorization: Bearer <token>` and the backend
- * re-verifies it (backend/src/middleware/auth.js). The cookie value is never
- * validated cryptographically here; a forged cookie simply fails at the API.
+ * The backend has no http-only session cookie, so the client mirrors each
+ * role's JWT into a same-named cookie (`auth_admin` / `auth_driver` /
+ * `auth_enforcer`) purely for this check (see lib/axios.ts persistToken).
+ * Cookie presence is a navigation gate only — every API call still carries
+ * `Authorization: Bearer <token>` and the backend re-verifies it
+ * (backend/src/middleware/auth.js). Cookie values are never validated
+ * cryptographically here; a forged cookie simply fails at the API.
+ *
+ * Per-role cookies are what allow concurrent sessions: an admin tab writes
+ * `auth_admin` while a driver tab writes `auth_driver`, and each protected
+ * prefix only looks at its own cookie — sibling tabs never interfere.
  */
 
-const TOKEN_COOKIE = "drivetrack_token";
+/** Mirror-cookie per role workspace (same values as TOKEN_STORAGE_KEYS). */
+const TOKEN_COOKIES = {
+  admin: "auth_admin",
+  driver: "auth_driver",
+  enforcer: "auth_enforcer",
+} as const;
 
 /**
  * Routes that require a session (see config.matcher below — keep the two in
@@ -23,9 +33,28 @@ const TOKEN_COOKIE = "drivetrack_token";
  * These three are the only role roots in this migration: the bottom nav links
  * exclusively to /admin/*, /home/* and /enforcer/*, and the old standalone
  * screens (/violations, /chat, /learning, /notifications, /profile) now live
- * nested under /home — so they need no prefix of their own.
+ * nested under /home — so they need no prefix of their own. Driver auth flows
+ * (/change-password, /register, /forgot-password) are driver-only screens, so
+ * they share the driver cookie.
  */
 const PROTECTED_PREFIXES = ["/admin", "/home", "/enforcer"] as const;
+
+function cookieForPath(pathname: string): string | null {
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return TOKEN_COOKIES.admin;
+  if (pathname === "/enforcer" || pathname.startsWith("/enforcer/")) {
+    return TOKEN_COOKIES.enforcer;
+  }
+  if (
+    pathname === "/home" ||
+    pathname.startsWith("/home/") ||
+    pathname === "/change-password" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password"
+  ) {
+    return TOKEN_COOKIES.driver;
+  }
+  return null;
+}
 
 /** Auth screens that bounce an already-signed-in user to their role home. */
 const AUTH_PATHS = new Set(["/login", "/register"]);
@@ -55,8 +84,11 @@ function roleFromToken(token: string): string | null {
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get(TOKEN_COOKIE)?.value;
-  const hasSession = Boolean(token);
+  const cookieName = cookieForPath(pathname);
+  // Role-less public pages (/login, /) carry no gate — fall through.
+  // Protected prefixes consult ONLY their own role's cookie, so an admin
+  // session never admits a driver tab and vice versa.
+  const hasSession = cookieName ? Boolean(request.cookies.get(cookieName)?.value) : true;
 
   // 1. Signed-out → protected routes go to /login, remembering where they
   //    were headed so login can send them back.
@@ -78,9 +110,11 @@ export function proxy(request: NextRequest) {
   //    this rule only ever governed whether the LOGIN FORM was reachable.)
   //
   //    Rendering it for a signed-in browser is safe: persisting a new session
-  //    overwrites the old token, user blob and mirror cookie wholesale
-  //    (AuthContext.persistSession), and the 401 interceptor clears the session
-  //    before it navigates to /login, so this is also the page it lands on.
+  //    writes only that role's keys and mirror cookie (AuthContext.persistSession
+  //    via lib/axios.ts persistToken), so signing in as a second role in another
+  //    tab leaves this tab's session alone — and the 401 interceptor clears only
+  //    the failing tab's role before navigating to /login, so this is also the
+  //    page it lands on.
   //
   //    `AUTH_PATHS` and `roleFromToken` remain only as the record of that rule.
 

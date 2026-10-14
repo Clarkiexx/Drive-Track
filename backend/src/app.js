@@ -26,6 +26,11 @@ app.use(express.urlencoded({ extended: true }));
 // imagePath stored on each Evidence record (admin, driver, enforcer UIs).
 app.use('/uploads/evidence', express.static(path.join(__dirname, '..', 'uploads', 'evidence')));
 
+// Profile avatars are user-chosen display images (unlike license photos,
+// they carry no verification evidentiary value) — publicly readable like
+// evidence photos so every client can render them with a plain <img>.
+app.use('/uploads/avatars', express.static(path.join(__dirname, '..', 'uploads', 'avatars')));
+
 // Driver license photos contain personal information — same URLs as before
 // (/uploads/licenses/<filename>) but served only to authenticated admins
 // via the existing JWT + role middleware. No second auth system.

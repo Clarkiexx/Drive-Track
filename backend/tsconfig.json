@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "strict": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2022",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": ["server.js", "src/**/*", "seed-*.js"],
+  "exclude": ["node_modules", "dist", "uploads", "Docs"]
+}

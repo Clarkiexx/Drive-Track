@@ -101,10 +101,10 @@ export default function HomeScreen({ navigation }) {
 
       <Text style={styles.sectionTitle}>Quick Access</Text>
       <View style={styles.grid}>
-        <QuickCard icon="📄" label="My Violations" color="#FDECEC" onPress={() => navigation.getParent()?.navigate('Violations')} />
+        <QuickCard icon="📄" label="My Violations" color="#FDECEC" onPress={() => navigation.navigate('MyViolations')} />
         <QuickCard icon="📊" label="Violation Status" color="#E7F0FE" onPress={() => navigation.navigate('ViolationStatus')} />
         <QuickCard icon="🔔" label="Notifications" color="#FEF3D9" onPress={() => navigation.navigate('Notifications')} />
-        <QuickCard icon="💬" label="AI Chatbot" color="#E7F7EC" onPress={() => navigation.getParent()?.navigate('Chat')} />
+        <QuickCard icon="💬" label="AI Chatbot" color="#E7F7EC" onPress={() => navigation.navigate('Chatbot')} />
         <QuickCard icon="🚦" label="Learning Center" color="#FDF2E9" onPress={() => navigation.navigate('LearningCenter')} />
       </View>
     </ScrollView>

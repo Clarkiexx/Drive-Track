@@ -68,6 +68,15 @@ export function AuthProvider({ children }) {
     setMustChangePassword(false);
   }
 
+  // Persists a refreshed profile (My Profile edits / new avatar) to both
+  // SecureStore and state, so the change survives a restart.
+  async function updateDriver(driverInfo) {
+    if (driverInfo) {
+      await SecureStore.setItemAsync(DRIVER_KEY, JSON.stringify(driverInfo));
+    }
+    setDriver(driverInfo);
+  }
+
   // Whenever any API call comes back 401, sign out automatically instead
   // of leaving the app stuck showing a logged-in screen with a dead token.
   useEffect(() => {
@@ -76,7 +85,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ token, driver, mustChangePassword, isLoading, signIn, signOut, clearMustChangePassword }}
+      value={{ token, driver, mustChangePassword, isLoading, signIn, signOut, clearMustChangePassword, updateDriver }}
     >
       {children}
     </AuthContext.Provider>

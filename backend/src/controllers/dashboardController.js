@@ -1,18 +1,23 @@
-const { Op } = require('sequelize');
-const { Driver, Enforcer, Citation } = require('../models');
 const { success } = require('../utils/response');
+
+// Shared Prisma data layer — src/lib/prisma.js is the single place the client
+// and the error/date/number helpers come from (owned by the foundation lane).
+const { prisma, prismaErrorToHttp, toDateOnlyString, toNumber } = require('../lib/prisma');
 
 /** GET /dashboard/summary — the 4 stat cards on the admin Dashboard,
  * plus unsettledAmount used by the Settlements page's "Total Unsettled"
  * badge (a true system-wide sum, not just whatever page is on screen). */
 async function getSummary(req, res, next) {
   try {
-    const [totalDrivers, totalEnforcers, totalViolations, unsettledViolations, unsettledSum] = await Promise.all([
-      Driver.count(),
-      Enforcer.count(),
-      Citation.count(),
-      Citation.count({ where: { settlementStatus: 'pending' } }),
-      Citation.sum('fineAmount', { where: { settlementStatus: 'pending' } }),
+    const [totalDrivers, totalEnforcers, totalViolations, unsettledViolations, unsettled] = await Promise.all([
+      prisma.driver.count(),
+      prisma.enforcer.count(),
+      prisma.citation.count(),
+      prisma.citation.count({ where: { settlementStatus: 'pending' } }),
+      prisma.citation.aggregate({
+        where: { settlementStatus: 'pending' },
+        _sum: { fineAmount: true },
+      }),
     ]);
 
     return success(res, {
@@ -20,7 +25,9 @@ async function getSummary(req, res, next) {
       totalEnforcers,
       totalViolations,
       unsettledViolations,
-      unsettledAmount: unsettledSum || 0,
+      // Prisma returns a Decimal (or null for an empty set) — the API has
+      // always answered with a plain JSON number here.
+      unsettledAmount: toNumber(unsettled._sum.fineAmount) || 0,
     });
   } catch (err) {
     next(err);
@@ -44,9 +51,9 @@ async function getTrend(req, res, next) {
     const rangeStart = new Date(days[0]);
     rangeStart.setHours(0, 0, 0, 0);
 
-    const citations = await Citation.findAll({
-      where: { occurredAt: { [Op.gte]: rangeStart } },
-      attributes: ['occurredAt', 'settlementStatus'],
+    const citations = await prisma.citation.findMany({
+      where: { occurredAt: { gte: rangeStart } },
+      select: { occurredAt: true, settlementStatus: true },
     });
 
     const trend = days.map((day) => {
@@ -68,13 +75,13 @@ async function getTrend(req, res, next) {
 /** GET /dashboard/recent-activity — the activity feed on the admin Dashboard */
 async function getRecentActivity(req, res, next) {
   try {
-    const recentCitations = await Citation.findAll({
-      limit: 5,
-      order: [['createdAt', 'DESC']],
-      include: [
-        { model: Driver, attributes: ['firstName', 'lastName'] },
-        { model: Enforcer, attributes: ['firstName', 'lastName'] },
-      ],
+    const recentCitations = await prisma.citation.findMany({
+      take: 5,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        driver: { select: { firstName: true, lastName: true } },
+        enforcer: { select: { firstName: true, lastName: true } },
+      },
     });
 
     const activity = recentCitations.map((c) => ({
@@ -82,7 +89,7 @@ async function getRecentActivity(req, res, next) {
       description:
         c.recordType === 'warning'
           ? `Warning issued — ${c.placeOfViolation}`
-          : `${c.citationNumber} by Officer ${c.Enforcer?.lastName || '—'}`,
+          : `${c.citationNumber} by Officer ${c.enforcer?.lastName || '—'}`,
       timestamp: c.createdAt,
     }));
 

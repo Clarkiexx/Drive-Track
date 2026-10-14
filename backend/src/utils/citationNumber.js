@@ -1,5 +1,6 @@
-const { Citation } = require('../models');
-const { Op } = require('sequelize');
+// Shared Prisma data layer — src/lib/prisma.js is the single place the client
+// and the error/date/number helpers come from (owned by the foundation lane).
+const { prisma, prismaErrorToHttp, toDateOnlyString, toNumber } = require('../lib/prisma');
 
 const PREFIXES = {
   citation: 'CT',
@@ -11,17 +12,23 @@ const PREFIXES = {
  * Generates a citation number like CT-2026-00142 — prefix depends on
  * record_type, sequence resets per year, zero-padded to 5 digits.
  * Counts existing records of the same type/year rather than using a
- * separate counter table — simple and sufficient for this scale; a real
- * high-concurrency system would want a DB-level sequence to avoid any
- * race condition between simultaneous submissions.
+ * separate counter table — simple and sufficient for this scale.
+ *
+ * Runs on PostgreSQL/Neon now, so the caller owns collision handling: a
+ * duplicate INSERT raises P2002 and aborts the whole transaction, which means
+ * the number must be regenerated OUTSIDE any open transaction (see the retry
+ * loop in citationController.createCitation). `client` may be an interactive
+ * transaction client when a caller wants the count to share its snapshot.
  */
-async function generateCitationNumber(recordType) {
+async function generateCitationNumber(recordType, client = prisma) {
   const prefix = PREFIXES[recordType] || 'CT';
   const year = new Date().getFullYear();
 
-  const count = await Citation.count({
+  const count = await client.citation.count({
     where: {
-      citationNumber: { [Op.like]: `${prefix}-${year}-%` },
+      // MySQL's LIKE was case-insensitive (default collation); keep the same
+      // matching semantics on Postgres with mode: 'insensitive'.
+      citationNumber: { startsWith: `${prefix}-${year}-`, mode: 'insensitive' },
     },
   });
 

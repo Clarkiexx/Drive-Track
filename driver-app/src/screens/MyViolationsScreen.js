@@ -49,7 +49,7 @@ export default function MyViolationsScreen({ navigation }) {
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Home')}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.backArrow}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>My Violations</Text>

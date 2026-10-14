@@ -29,6 +29,9 @@ build/
 coverage/
 web-build/
 
+# Prisma generated client (regenerate with `npm run db:generate` in backend/)
+backend/src/generated/
+
 .expo/
 .expo-shared/
 expo-env.d.ts

@@ -1,9 +1,12 @@
 const bcrypt = require('bcrypt');
-const { Op, fn, col } = require('sequelize');
+const fs = require('fs');
+const path = require('path');
 const { validationResult } = require('express-validator');
-const { Driver, Citation } = require('../models');
+const { prisma, prismaErrorToHttp, toDateOnlyString } = require('../lib/prisma');
+const { normalizeUsername, buildUsername } = require('../utils/username');
 const { success, fail } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
+// Prisma-backed as of the lane-C port (no Sequelize left on this require path).
 const { logAdminAction } = require('../services/auditLogService');
 
 const SALT_ROUNDS = 10;
@@ -15,6 +18,41 @@ function handleValidation(req, res) {
     return false;
   }
   return true;
+}
+
+/**
+ * Response shape for a driver: passwordHash never leaves the server (the old
+ * `attributes: { exclude: ['passwordHash'] }`), and the @db.Date columns
+ * are rendered as `YYYY-MM-DD` — the exact format Sequelize DATEONLY sent to
+ * clients, since Prisma otherwise serializes them as full ISO timestamps.
+ * Prisma Decimal columns keep serializing to strings, same as mysql2 did
+ * (only the trailing-zero scale differs — see Docs/NEON_CUTOVER.md).
+ */
+function toDriverWire(driver) {
+  const { passwordHash: _omit, ...rest } = driver;
+  if (rest.dateOfBirth) rest.dateOfBirth = toDateOnlyString(rest.dateOfBirth);
+  if (rest.expirationDate) rest.expirationDate = toDateOnlyString(rest.expirationDate);
+  if (rest.issueDate) rest.issueDate = toDateOnlyString(rest.issueDate);
+  return rest;
+}
+
+/** Uniqueness violations keep the controller-specific wording; 500s fall
+ *  through to next(err) and the generic error handler, as before. */
+function respondWithMappedError(res, next, err, onConflict) {
+  const http = prismaErrorToHttp(err);
+  if (http.status >= 500) return next(err);
+  const message = http.status === 409 && onConflict ? onConflict : http.message;
+  return fail(res, message, http.status, http.errors);
+}
+
+/** True when a P2002 unique violation concerns the given column — the
+ *  constraint target is reported as either the Prisma field name or the raw
+ *  DB column, so both spellings are accepted. */
+function isUniqueViolationOn(err, field) {
+  if (!err || err.code !== 'P2002') return false;
+  const target = err.meta && err.meta.target;
+  const text = Array.isArray(target) ? target.join(',') : String(target || '');
+  return text.toLowerCase().includes(field.toLowerCase());
 }
 
 /**
@@ -30,20 +68,22 @@ async function listDrivers(req, res, next) {
     const where = {};
     if (status) where.verificationStatus = status;
     if (search) {
-      where[Op.or] = [
-        { firstName: { [Op.like]: `%${search}%` } },
-        { lastName: { [Op.like]: `%${search}%` } },
-        { licenseNumber: { [Op.like]: `%${search}%` } },
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { licenseNumber: { contains: search, mode: 'insensitive' } },
       ];
     }
 
-    const { rows, count } = await Driver.findAndCountAll({
-      where,
-      limit,
-      offset: (page - 1) * limit,
-      order: [['createdAt', 'DESC']],
-      attributes: { exclude: ['passwordHash'] },
-    });
+    const [count, rows] = await Promise.all([
+      prisma.driver.count({ where }),
+      prisma.driver.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
 
     // Bulk-count violations per driver in two grouped queries rather than
     // one query per row — avoids an N+1 query pattern across a page of
@@ -52,25 +92,23 @@ async function listDrivers(req, res, next) {
     const driverIds = rows.map((d) => d.driverId);
     const [totalCounts, unsettledCounts] = driverIds.length
       ? await Promise.all([
-          Citation.findAll({
-            where: { driverId: driverIds },
-            attributes: ['driverId', [fn('COUNT', col('citation_id')), 'count']],
-            group: ['driverId'],
-            raw: true,
+          prisma.citation.groupBy({
+            by: ['driverId'],
+            where: { driverId: { in: driverIds } },
+            _count: { _all: true },
           }),
-          Citation.findAll({
-            where: { driverId: driverIds, settlementStatus: 'pending' },
-            attributes: ['driverId', [fn('COUNT', col('citation_id')), 'count']],
-            group: ['driverId'],
-            raw: true,
+          prisma.citation.groupBy({
+            by: ['driverId'],
+            where: { driverId: { in: driverIds }, settlementStatus: 'pending' },
+            _count: { _all: true },
           }),
         ])
       : [[], []];
-    const totalMap = Object.fromEntries(totalCounts.map((r) => [r.driverId, Number(r.count)]));
-    const unsettledMap = Object.fromEntries(unsettledCounts.map((r) => [r.driverId, Number(r.count)]));
+    const totalMap = Object.fromEntries(totalCounts.map((r) => [r.driverId, r._count._all]));
+    const unsettledMap = Object.fromEntries(unsettledCounts.map((r) => [r.driverId, r._count._all]));
 
     const drivers = rows.map((d) => ({
-      ...d.toJSON(),
+      ...toDriverWire(d),
       totalViolations: totalMap[d.driverId] || 0,
       unsettledViolations: unsettledMap[d.driverId] || 0,
     }));
@@ -80,19 +118,20 @@ async function listDrivers(req, res, next) {
       pagination: { page, limit, total: count, totalPages: Math.ceil(count / limit) },
     });
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
 async function getDriver(req, res, next) {
   try {
-    const driver = await Driver.findByPk(req.params.id, {
-      attributes: { exclude: ['passwordHash'] },
-    });
+    const driverId = Number(req.params.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
     if (!driver) return fail(res, 'Driver not found', 404);
-    return success(res, driver);
+    return success(res, toDriverWire(driver));
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -108,10 +147,12 @@ async function createDriver(req, res, next) {
     if (!handleValidation(req, res)) return;
 
     const { firstName, lastName, licenseNumber, middleInitial, address, contactNumber,
-      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, agencyCode,
+      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, issueDate, agencyCode,
       bloodType, eyeColor, dlCodes, condition } = req.body;
 
-    const existing = await Driver.findOne({ where: { licenseNumber } });
+    const existing = await prisma.driver.findFirst({
+      where: { licenseNumber: { equals: licenseNumber, mode: 'insensitive' } },
+    });
     if (existing) {
       return fail(res, 'A driver with this license number already exists', 409);
     }
@@ -120,10 +161,12 @@ async function createDriver(req, res, next) {
     // design (no silent suffixes). A different person sharing the exact
     // same full name gets a clear error — the enforcer should verify the
     // license number spelling against the physical license instead.
-    const candidateUsername = Driver.normalizeUsername(
+    const candidateUsername = normalizeUsername(
       [firstName, middleInitial, lastName].filter(Boolean).join(' ')
     );
-    const nameClash = await Driver.findOne({ where: { username: candidateUsername } });
+    const nameClash = await prisma.driver.findFirst({
+      where: { username: { equals: candidateUsername, mode: 'insensitive' } },
+    });
     if (nameClash) {
       return fail(
         res,
@@ -142,91 +185,189 @@ async function createDriver(req, res, next) {
     // to actually confirm the record before verifying it.
     const isEnforcerCreated = req.user.role === 'enforcer';
 
-    const driver = await Driver.create({
-      firstName,
-      middleInitial: middleInitial || null,
-      lastName,
-      licenseNumber,
-      address: address || null,
-      contactNumber: contactNumber || null,
-      nationality: nationality || 'PHL',
-      sex: sex || null,
-      dateOfBirth: dateOfBirth || null,
-      weightKg: weightKg || null,
-      heightM: heightM || null,
-      expirationDate: expirationDate || null,
-      agencyCode: agencyCode || null,
-      bloodType: bloodType || null,
-      eyeColor: eyeColor || null,
-      dlCodes: dlCodes || null,
-      condition: condition || null,
-      passwordHash,
-      mustChangePassword: true,
-      verificationStatus: isEnforcerCreated ? 'pending' : 'verified',
-      licensePhotoPath: req.file ? `/uploads/licenses/${req.file.filename}` : null,
+    const driver = await prisma.driver.create({
+      data: {
+        firstName,
+        middleInitial: middleInitial || null,
+        lastName,
+        licenseNumber,
+        username: candidateUsername,
+        address: address || null,
+        contactNumber: contactNumber || null,
+        nationality: nationality || 'PHL',
+        sex: sex || null,
+        dateOfBirth: dateOfBirth || null,
+        weightKg: weightKg || null,
+        heightM: heightM || null,
+        expirationDate: expirationDate || null,
+        issueDate: issueDate || null,
+        agencyCode: agencyCode || null,
+        bloodType: bloodType || null,
+        eyeColor: eyeColor || null,
+        dlCodes: dlCodes || null,
+        condition: condition || null,
+        passwordHash,
+        mustChangePassword: true,
+        verificationStatus: isEnforcerCreated ? 'pending' : 'verified',
+        licensePhotoPath: req.file ? `/uploads/licenses/${req.file.filename}` : null,
+      },
     });
 
-    const { passwordHash: _omit, ...safeDriver } = driver.toJSON();
     if (req.user.role === 'admin') {
       logAdminAction(req.user.id, 'created_driver', 'driver', driver.driverId, `${firstName} ${lastName} (${licenseNumber})`);
     }
-    return success(res, safeDriver, 'Driver created', 201);
+    return success(res, toDriverWire(driver), 'Driver created', 201);
   } catch (err) {
     // Race safety net: the pre-check above can be beaten by a concurrent
     // create — map the username unique violation to the same clear message.
-    if (err.name === 'SequelizeUniqueConstraintError') {
-      const usernameClash = (err.errors || []).some((e) => e.path === 'username');
-      if (usernameClash) {
-        return fail(
-          res,
-          'A driver with this full name already exists. Verify the name spelling against the physical license. License number remains the primary identifier.',
-          409
-        );
-      }
+    if (isUniqueViolationOn(err, 'username')) {
+      return fail(
+        res,
+        'A driver with this full name already exists. Verify the name spelling against the physical license. License number remains the primary identifier.',
+        409
+      );
     }
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
 async function updateDriver(req, res, next) {
   try {
-    const driver = await Driver.findByPk(req.params.id);
+    const driverId = Number(req.params.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
     if (!driver) return fail(res, 'Driver not found', 404);
 
     const { firstName, middleInitial, lastName, address, contactNumber,
-      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, agencyCode,
+      nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, issueDate, agencyCode,
       bloodType, eyeColor, dlCodes, condition } = req.body;
-    if (firstName !== undefined) driver.firstName = firstName;
-    if (middleInitial !== undefined) driver.middleInitial = middleInitial;
-    if (lastName !== undefined) driver.lastName = lastName;
-    if (address !== undefined) driver.address = address;
-    if (contactNumber !== undefined) driver.contactNumber = contactNumber;
-    if (nationality !== undefined) driver.nationality = nationality;
-    if (sex !== undefined) driver.sex = sex;
-    if (dateOfBirth !== undefined) driver.dateOfBirth = dateOfBirth;
-    if (weightKg !== undefined) driver.weightKg = weightKg;
-    if (heightM !== undefined) driver.heightM = heightM;
-    if (expirationDate !== undefined) driver.expirationDate = expirationDate;
-    if (agencyCode !== undefined) driver.agencyCode = agencyCode;
-    if (bloodType !== undefined) driver.bloodType = bloodType;
-    if (eyeColor !== undefined) driver.eyeColor = eyeColor;
-    if (dlCodes !== undefined) driver.dlCodes = dlCodes;
-    if (condition !== undefined) driver.condition = condition;
 
-    await driver.save();
+    const data = {};
+    if (firstName !== undefined) data.firstName = firstName;
+    if (middleInitial !== undefined) data.middleInitial = middleInitial;
+    if (lastName !== undefined) data.lastName = lastName;
+    if (address !== undefined) data.address = address;
+    if (contactNumber !== undefined) data.contactNumber = contactNumber;
+    if (nationality !== undefined) data.nationality = nationality;
+    if (sex !== undefined) data.sex = sex;
+    if (dateOfBirth !== undefined) data.dateOfBirth = dateOfBirth;
+    if (weightKg !== undefined) data.weightKg = weightKg;
+    if (heightM !== undefined) data.heightM = heightM;
+    if (expirationDate !== undefined) data.expirationDate = expirationDate;
+    if (issueDate !== undefined) data.issueDate = issueDate;
+    if (agencyCode !== undefined) data.agencyCode = agencyCode;
+    if (bloodType !== undefined) data.bloodType = bloodType;
+    if (eyeColor !== undefined) data.eyeColor = eyeColor;
+    if (dlCodes !== undefined) data.dlCodes = dlCodes;
+    if (condition !== undefined) data.condition = condition;
 
-    const { passwordHash: _omit, ...safeDriver } = driver.toJSON();
-    logAdminAction(req.user.id, 'updated_driver', 'driver', driver.driverId, `${driver.firstName} ${driver.lastName}`);
-    return success(res, safeDriver, 'Driver updated');
+    // The login username tracks the name columns — the old beforeValidate
+    // hook recomputed it on every save, so do the same from the merged
+    // (post-patch) values.
+    data.username = buildUsername(
+      data.firstName !== undefined ? data.firstName : driver.firstName,
+      data.middleInitial !== undefined ? data.middleInitial : driver.middleInitial,
+      data.lastName !== undefined ? data.lastName : driver.lastName
+    );
+
+    const updated = await prisma.driver.update({ where: { driverId }, data });
+
+    logAdminAction(req.user.id, 'updated_driver', 'driver', updated.driverId, `${updated.firstName} ${updated.lastName}`);
+    return success(res, toDriverWire(updated), 'Driver updated');
   } catch (err) {
-    if (err.name === 'SequelizeUniqueConstraintError') {
+    if (isUniqueViolationOn(err, 'username')) {
       return fail(
         res,
         'Another driver already uses this full name. Verify the name spelling against the physical license.',
         409
       );
     }
-    next(err);
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * PATCH /drivers/me — the signed-in driver updates their own profile
+ * (My Profile). Same editable fields as the admin updateDriver above, minus
+ * everything identity- or verification-related: licenseNumber, verification
+ * status, and license documents stay admin-owned. The login username tracks
+ * the name columns, so it is rebuilt from the merged values exactly as the
+ * admin path does — a rename changes what the next login must match.
+ *
+ * No audit-log row: logAdminAction needs an admin actor and a self-update
+ * has none; the updated_at timestamp on the row is the trail.
+ */
+async function updateDriverMe(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+
+    const driverId = Number(req.user.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
+    if (!driver) return fail(res, 'Driver not found', 404);
+
+    const { firstName, middleInitial, lastName, address, contactNumber } = req.body;
+
+    const data = {};
+    if (firstName !== undefined) data.firstName = firstName;
+    if (middleInitial !== undefined) data.middleInitial = middleInitial;
+    if (lastName !== undefined) data.lastName = lastName;
+    if (address !== undefined) data.address = address || null;
+    if (contactNumber !== undefined) data.contactNumber = contactNumber || null;
+
+    data.username = buildUsername(
+      data.firstName !== undefined ? data.firstName : driver.firstName,
+      data.middleInitial !== undefined ? data.middleInitial : driver.middleInitial,
+      data.lastName !== undefined ? data.lastName : driver.lastName
+    );
+
+    const updated = await prisma.driver.update({ where: { driverId }, data });
+    return success(res, toDriverWire(updated), 'Profile updated');
+  } catch (err) {
+    if (isUniqueViolationOn(err, 'username')) {
+      return fail(
+        res,
+        'Another driver already uses this full name. Verify the name spelling against the physical license.',
+        409
+      );
+    }
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * PATCH /drivers/me/photo — the signed-in driver uploads or replaces their
+ * profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB, stored under
+ * /uploads/avatars/ and served publicly like evidence photos). The previous
+ * avatar file is removed best-effort; license photos are never touched —
+ * they are verification evidence, not display images.
+ */
+async function updateDriverPhotoMe(req, res, next) {
+  try {
+    if (!req.file) return fail(res, 'A photo file is required', 422);
+
+    const driverId = Number(req.user.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
+    if (!driver) return fail(res, 'Driver not found', 404);
+
+    const photoPath = `/uploads/avatars/${req.file.filename}`;
+    const previous = driver.profilePhotoPath;
+    if (previous && previous.startsWith('/uploads/avatars/')) {
+      const absolute = path.join(__dirname, '..', '..', previous);
+      fs.promises.unlink(absolute).catch(() => {});
+    }
+
+    const updated = await prisma.driver.update({
+      where: { driverId },
+      data: { profilePhotoPath: photoPath },
+    });
+    return success(res, toDriverWire(updated), 'Profile photo updated');
+  } catch (err) {
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -239,19 +380,26 @@ async function updateDriverStatus(req, res, next) {
       return fail(res, 'Invalid status value', 422);
     }
 
-    const driver = await Driver.findByPk(req.params.id);
+    const driverId = Number(req.params.id);
+    const driver = Number.isInteger(driverId)
+      ? await prisma.driver.findUnique({ where: { driverId } })
+      : null;
     if (!driver) return fail(res, 'Driver not found', 404);
 
-    driver.verificationStatus = status;
-    if (reason !== undefined) driver.statusReason = reason || null;
-    driver.statusChangedAt = new Date();
-    driver.statusChangedBy = req.user?.id || null;
-    await driver.save();
+    const updated = await prisma.driver.update({
+      where: { driverId },
+      data: {
+        verificationStatus: status,
+        statusReason: reason !== undefined ? (reason || null) : driver.statusReason,
+        statusChangedAt: new Date(),
+        statusChangedBy: req.user?.id || null,
+      },
+    });
 
-    logAdminAction(req.user.id, 'changed_driver_status', 'driver', driver.driverId, `${driver.firstName} ${driver.lastName} → ${status}${reason ? ` (${reason})` : ''}`);
-    return success(res, { driverId: driver.driverId, verificationStatus: status }, 'Status updated');
+    logAdminAction(req.user.id, 'changed_driver_status', 'driver', updated.driverId, `${updated.firstName} ${updated.lastName} → ${status}${reason ? ` (${reason})` : ''}`);
+    return success(res, { driverId: updated.driverId, verificationStatus: status }, 'Status updated');
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -286,27 +434,23 @@ async function searchDrivers(req, res, next) {
 
     const where = {};
     if (licenseNumber) {
-      where.licenseNumber = licenseNumber.trim();
+      where.licenseNumber = { equals: licenseNumber.trim(), mode: 'insensitive' };
     } else if (fullName) {
       const q = fullName.trim();
-      const normalized = Driver.normalizeUsername(q);
-      where[Op.or] = [
-        { username: { [Op.like]: `%${normalized}%` } },
-        { firstName: { [Op.like]: `%${q}%` } },
-        { lastName: { [Op.like]: `%${q}%` } },
-        { licenseNumber: { [Op.like]: `%${q}%` } },
+      const normalized = normalizeUsername(q);
+      where.OR = [
+        { username: { contains: normalized, mode: 'insensitive' } },
+        { firstName: { contains: q, mode: 'insensitive' } },
+        { lastName: { contains: q, mode: 'insensitive' } },
+        { licenseNumber: { contains: q, mode: 'insensitive' } },
       ];
     }
 
-    const drivers = await Driver.findAll({
-      where,
-      limit: 10,
-      attributes: { exclude: ['passwordHash'] },
-    });
+    const drivers = await prisma.driver.findMany({ where, take: 10 });
 
-    return success(res, drivers);
+    return success(res, drivers.map(toDriverWire));
   } catch (err) {
-    next(err);
+    return respondWithMappedError(res, next, err);
   }
 }
 
@@ -315,6 +459,8 @@ module.exports = {
   getDriver,
   createDriver,
   updateDriver,
+  updateDriverMe,
+  updateDriverPhotoMe,
   updateDriverStatus,
   deleteDriver,
   searchDrivers,

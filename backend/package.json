@@ -4,10 +4,21 @@
   "description": "DriveTrack backend API - CTMO digital traffic citation system",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
+    "start": "tsx server.js",
+    "dev": "tsx watch server.js",
+    "build": "tsdown",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "seed:admin": "tsx seed-admin.js",
+    "seed:enforcer": "tsx seed-enforcer.js",
+    "seed:violation-types": "tsx seed-violation-types.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@prisma/adapter-pg": "7.7.0",
+    "@prisma/client": "7.8.0",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -16,9 +27,15 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.11.0",
-    "sequelize": "^6.37.3"
+    "pg": "8.20.0",
+    "sequelize": "^6.37.3",
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "eslint": "^9.39.5",
+    "nodemon": "^3.1.4",
+    "prisma": "7.8.0",
+    "tsdown": "^0.23.0",
+    "typescript": "~5.9"
   }
 }

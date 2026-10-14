@@ -1,11 +1,11 @@
 // Seeds the initial violation types catalog shown on the Enforcer's
-// "Issue Citation" screen. Run once with: node seed-violation-types.js
+// "Issue Citation" screen. Run once with: npx tsx seed-violation-types.js
 // Penalty amounts below are placeholders based on typical LTO fine
 // ranges — confirm actual CTMO figures before using this for anything
 // beyond development/testing.
 
 require('dotenv').config();
-const { sequelize, ViolationType } = require('./src/models');
+const { prisma } = require('./src/lib/prisma');
 
 const violationTypes = [
   {
@@ -47,18 +47,21 @@ const violationTypes = [
 ];
 
 async function seed() {
-  await sequelize.authenticate();
-
   for (const vt of violationTypes) {
     // eslint-disable-next-line no-await-in-loop
-    const [, created] = await ViolationType.findOrCreate({
+    const existing = await prisma.violationType.findFirst({
       where: { articleSection: vt.articleSection },
-      defaults: vt,
     });
-    console.log(`${created ? 'Created' : 'Already existed'}: ${vt.articleSection} — ${vt.description}`);
+    if (existing) {
+      console.log(`Already existed: ${vt.articleSection} — ${vt.description}`);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await prisma.violationType.create({ data: vt });
+      console.log(`Created: ${vt.articleSection} — ${vt.description}`);
+    }
   }
 
-  await sequelize.close();
+  await prisma.$disconnect();
 }
 
 seed().catch((err) => {

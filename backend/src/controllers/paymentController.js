@@ -1,8 +1,20 @@
 const crypto = require('crypto');
-const { sequelize, Citation } = require('../models');
+// Shared Prisma data layer — `src/lib/prisma.js` is the single place the
+// client and the error/date/number helpers come from.
+const { prisma, prismaErrorToHttp, toDateOnlyString, toNumber } = require('../lib/prisma');
 const { success, fail } = require('../utils/response');
 const { notifyDriver } = require('../services/notificationService');
 const xendit = require('../services/xenditService');
+
+/**
+ * `:id` params: MySQL coerced non-numeric ids (findByPk('abc') -> row id 0),
+ * while Prisma rejects them with a validation error. Parse first so the
+ * original "Citation not found" 404 path is preserved. '12abc' -> 12, like MySQL.
+ */
+function parseId(value) {
+  const id = parseInt(value, 10);
+  return Number.isInteger(id) ? id : null;
+}
 
 // Phase 4.1: in-memory per-citation checkout throttle (60s) to prevent
 // Pay-Now tap-spam creating unbounded sessions. No persistence — a server
@@ -35,7 +47,10 @@ async function createCheckout(req, res, next) {
       return fail(res, 'Online payments are not configured. Please pay at the CTMO office.', 503);
     }
 
-    const citation = await Citation.findByPk(req.params.id);
+    const citationId = parseId(req.params.id);
+    const citation = citationId === null
+      ? null
+      : await prisma.citation.findUnique({ where: { citationId } });
     if (!citation) return fail(res, 'Citation not found', 404);
 
     // A driver may only pay their own citation.
@@ -56,7 +71,9 @@ async function createCheckout(req, res, next) {
     }
 
     // Amount ALWAYS comes from the server-side citation — never the client.
-    const amount = Math.round(Number(citation.fineAmount));
+    // fineAmount is a Prisma Decimal; toNumber() coerces it like the old
+    // Sequelize DECIMAL value did (null/absent still lands in the 422 below).
+    const amount = Math.round(toNumber(citation.fineAmount));
     if (!Number.isFinite(amount) || amount <= 0) {
       return fail(res, 'This citation has no payable amount', 422);
     }
@@ -198,49 +215,53 @@ async function handleWebhook(req, res, next) {
       return success(res, null, 'Ignored: unknown reference');
     }
 
-    const t = await sequelize.transaction();
-    try {
-      const citation = await Citation.findByPk(citationId, {
-        transaction: t,
-        lock: t.LOCK.UPDATE,
+    // Prisma has no SELECT ... FOR UPDATE: read the row first (cheap
+    // pre-checks) and then settle through a conditional updateMany whose
+    // affected-row count is the concurrency gate — exactly one webhook can
+    // move the row out of 'pending'.
+    const citation = await prisma.citation.findUnique({ where: { citationId } });
+    if (!citation) {
+      // eslint-disable-next-line no-console
+      console.warn('[payments] citation not found:', citationId);
+      return success(res, null, 'Ignored: citation not found');
+    }
+    if (citation.settlementStatus !== 'pending') {
+      // Duplicate/late webhook for an already-settled/cancelled record.
+      return success(res, null, 'Ignored: citation not pending');
+    }
+
+    // 4) Exact amount match against the server-side fine.
+    const expected = Math.round(toNumber(citation.fineAmount));
+    const paid = Math.round(Number(payment.request_amount ?? session.amount));
+    if (!Number.isFinite(paid) || paid !== expected) {
+      // eslint-disable-next-line no-console
+      console.warn('[payments] amount mismatch:', { citationId, expected, paid });
+      return success(res, null, 'Ignored: amount mismatch');
+    }
+
+    // 5) Known channel only — never guess.
+    const method = mapChannelToMethod(payment.channel_code);
+    if (!method) {
+      // eslint-disable-next-line no-console
+      console.warn('[payments] unknown channel_code:', payment.channel_code, paymentSessionId);
+      return success(res, null, 'Ignored: unknown channel');
+    }
+
+    const settled = await prisma.$transaction(async (tx) => {
+      // The WHERE clause re-checks `settlementStatus: 'pending'`, so a
+      // concurrent/late webhook matches 0 rows and becomes a no-op instead
+      // of double-settling the citation.
+      const { count } = await tx.citation.updateMany({
+        where: { citationId, settlementStatus: 'pending' },
+        data: {
+          settlementStatus: 'settled',
+          settledAt: new Date(),
+          paymentMethod: method,
+          paymentReference: paymentSessionId,
+          receivedBy: null, // online payment — no admin/staff handler
+        },
       });
-      if (!citation) {
-        await t.rollback();
-        // eslint-disable-next-line no-console
-        console.warn('[payments] citation not found:', citationId);
-        return success(res, null, 'Ignored: citation not found');
-      }
-      if (citation.settlementStatus !== 'pending') {
-        await t.rollback();
-        // Duplicate/late webhook for an already-settled/cancelled record.
-        return success(res, null, 'Ignored: citation not pending');
-      }
-
-      // 4) Exact amount match against the server-side fine.
-      const expected = Math.round(Number(citation.fineAmount));
-      const paid = Math.round(Number(payment.request_amount ?? session.amount));
-      if (!Number.isFinite(paid) || paid !== expected) {
-        await t.rollback();
-        // eslint-disable-next-line no-console
-        console.warn('[payments] amount mismatch:', { citationId, expected, paid });
-        return success(res, null, 'Ignored: amount mismatch');
-      }
-
-      // 5) Known channel only — never guess.
-      const method = mapChannelToMethod(payment.channel_code);
-      if (!method) {
-        await t.rollback();
-        // eslint-disable-next-line no-console
-        console.warn('[payments] unknown channel_code:', payment.channel_code, paymentSessionId);
-        return success(res, null, 'Ignored: unknown channel');
-      }
-
-      citation.settlementStatus = 'settled';
-      citation.settledAt = new Date();
-      citation.paymentMethod = method;
-      citation.paymentReference = paymentSessionId;
-      citation.receivedBy = null; // online payment — no admin/staff handler
-      await citation.save({ transaction: t });
+      if (count === 0) return false;
 
       await notifyDriver(
         {
@@ -249,18 +270,18 @@ async function handleWebhook(req, res, next) {
           message: `Your online payment for citation ${citation.citationNumber} has been confirmed. Thank you!`,
           notificationType: 'settlement_confirmed',
         },
-        { transaction: t }
+        { transaction: tx }
       );
+      return true;
+    });
 
-      await t.commit();
-      // NOTE: no audit-log row here — AuditLog.admin_id is NOT NULL and a
-      // webhook has no admin actor; the payment_session_id reference plus
-      // the driver notification form the trail.
-      return success(res, null, 'Citation settled');
-    } catch (err) {
-      await t.rollback();
-      throw err;
+    if (!settled) {
+      return success(res, null, 'Ignored: citation not pending');
     }
+    // NOTE: no audit-log row here — AuditLog.admin_id is NOT NULL and a
+    // webhook has no admin actor; the payment_session_id reference plus
+    // the driver notification form the trail.
+    return success(res, null, 'Citation settled');
   } catch (err) {
     next(err);
   }

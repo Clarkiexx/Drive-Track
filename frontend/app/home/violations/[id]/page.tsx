@@ -101,6 +101,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
         }
         checkoutTabRef.current = null;
         setActiveCheckout(null);
+        setSessionOpened(false);
       } else {
         // Rehydrate the live session so a refresh or revisit reuses the same
         // Xendit link instead of spawning a duplicate tab.
@@ -119,6 +120,32 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     const timer = window.setTimeout(load, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    // The driver coming back from hosted checkout regains tab focus here.
+    // Re-verify against Xendit (covers webhook outage/delay) and reload, so a
+    // completed payment flips to Settled without waiting for the webhook.
+    if (!sessionOpened && !activeCheckout) return;
+    const reconcile = () => {
+      void (async () => {
+        try {
+          await paymentService.getStatus(id);
+        } catch {
+          // Transport failure — the reload below still refreshes from our DB.
+        }
+        await load();
+      })();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void reconcile();
+    };
+    window.addEventListener("focus", reconcile);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", reconcile);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [sessionOpened, activeCheckout, id, load]);
 
   /** Exact driver-facing notice when online checkout is unconfigured. */
   const ONLINE_PAYMENTS_UNCONFIGURED_MESSAGE =

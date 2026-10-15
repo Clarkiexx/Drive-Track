@@ -17,4 +17,11 @@ router.post(
   paymentController.createCheckout
 );
 
+router.get(
+  '/citations/:id/status',
+  authenticate,
+  allowRoles('driver'),
+  paymentController.getCheckoutStatus
+);
+
 module.exports = router;

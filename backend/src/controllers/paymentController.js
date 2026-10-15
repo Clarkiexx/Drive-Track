@@ -93,6 +93,22 @@ async function createCheckout(req, res, next) {
     }
 
     markCheckout(citation.citationId);
+
+    // Remember the live session on the citation so a later status check can
+    // reconcile (webhook outage, delayed delivery). paymentReference is only
+    // displayed once settled, and settling overwrites it with the same id —
+    // bookkeeping only, never settlement. Failures here must not block the
+    // checkout URL the driver is waiting for.
+    try {
+      await prisma.citation.update({
+        where: { citationId: citation.citationId },
+        data: { paymentReference: session.payment_session_id },
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[payments] could not store session reference:', err.message);
+    }
+
     return success(res, {
       checkoutUrl: session.payment_link_url,
       paymentSessionId: session.payment_session_id,
@@ -105,6 +121,7 @@ async function createCheckout(req, res, next) {
 
 module.exports = {
   createCheckout,
+  getCheckoutStatus,
   handleWebhook,
   returnPage,
   // Exported for verification/testing; webhook + return page land in 4.2.
@@ -145,11 +162,140 @@ function mapChannelToMethod(channelCode) {
 }
 
 /**
+ * Shared settlement core used by BOTH the Xendit webhook and the driver
+ * status-check endpoint. Verifies authoritatively with Xendit (session
+ * COMPLETED → payment SUCCEEDED → PHP + exact amount → known channel →
+ * citation still pending) and settles through the conditional updateMany
+ * concurrency gate. Never throws for business rejections — returns
+ * `{ outcome: 'ignored', reason }`; operational failures (Xendit
+ * unreachable) return `{ outcome: 'error', reason }` so callers can 502.
+ */
+async function settleOnlineSession(paymentSessionId) {
+  if (!paymentSessionId) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] completed webhook without payment_session_id');
+    return { outcome: 'ignored', reason: 'no session reference' };
+  }
+
+  // 1) Authoritative session check — COMPLETED required.
+  let session;
+  try {
+    session = await xendit.getPaymentSession(paymentSessionId);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[payments] session lookup failed:', err.message);
+    return { outcome: 'error', reason: 'Unable to verify payment session' };
+  }
+  if (session?.status !== 'COMPLETED') {
+    return { outcome: 'ignored', reason: 'session not completed' };
+  }
+
+  // 2) Independent payment check — SUCCEEDED required.
+  const paymentId = session.payment_id;
+  if (!paymentId) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] completed session without payment_id:', paymentSessionId);
+    return { outcome: 'ignored', reason: 'no payment reference' };
+  }
+  let payment;
+  try {
+    payment = await xendit.getPayment(paymentId);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[payments] payment lookup failed:', err.message);
+    return { outcome: 'error', reason: 'Unable to verify payment' };
+  }
+  if (payment?.status !== 'SUCCEEDED') {
+    return { outcome: 'ignored', reason: 'payment not succeeded' };
+  }
+  if (String(payment.currency || '').toUpperCase() !== 'PHP') {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] non-PHP payment:', payment.currency, paymentSessionId);
+    return { outcome: 'ignored', reason: 'currency mismatch' };
+  }
+
+  // 3) Correlate to citation via our stable reference prefix.
+  const citationId = xendit.parseCitationIdFromReference(session.reference_id);
+  if (!citationId) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] unparseable reference_id:', session.reference_id);
+    return { outcome: 'ignored', reason: 'unknown reference' };
+  }
+
+  // Prisma has no SELECT ... FOR UPDATE: read the row first (cheap
+  // pre-checks) and then settle through a conditional updateMany whose
+  // affected-row count is the concurrency gate — exactly one caller can
+  // move the row out of 'pending'.
+  const citation = await prisma.citation.findUnique({ where: { citationId } });
+  if (!citation) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] citation not found:', citationId);
+    return { outcome: 'ignored', reason: 'citation not found' };
+  }
+  if (citation.settlementStatus !== 'pending') {
+    // Duplicate/late event for an already-settled/cancelled record.
+    return { outcome: 'ignored', reason: 'citation not pending' };
+  }
+
+  // 4) Exact amount match against the server-side fine.
+  const expected = Math.round(toNumber(citation.fineAmount));
+  const paid = Math.round(Number(payment.request_amount ?? session.amount));
+  if (!Number.isFinite(paid) || paid !== expected) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] amount mismatch:', { citationId, expected, paid });
+    return { outcome: 'ignored', reason: 'amount mismatch' };
+  }
+
+  // 5) Known channel only — never guess.
+  const method = mapChannelToMethod(payment.channel_code);
+  if (!method) {
+    // eslint-disable-next-line no-console
+    console.warn('[payments] unknown channel_code:', payment.channel_code, paymentSessionId);
+    return { outcome: 'ignored', reason: 'unknown channel' };
+  }
+
+  const settled = await prisma.$transaction(async (tx) => {
+    // The WHERE clause re-checks `settlementStatus: 'pending'`, so a
+    // concurrent/late caller matches 0 rows and becomes a no-op instead
+    // of double-settling the citation.
+    const { count } = await tx.citation.updateMany({
+      where: { citationId, settlementStatus: 'pending' },
+      data: {
+        settlementStatus: 'settled',
+        settledAt: new Date(),
+        paymentMethod: method,
+        paymentReference: paymentSessionId,
+        receivedBy: null, // online payment — no admin/staff handler
+      },
+    });
+    if (count === 0) return false;
+
+    await notifyDriver(
+      {
+        driverId: citation.driverId,
+        citationId: citation.citationId,
+        message: `Your online payment for citation ${citation.citationNumber} has been confirmed. Thank you!`,
+        notificationType: 'settlement_confirmed',
+      },
+      { transaction: tx }
+    );
+    return true;
+  });
+
+  if (!settled) {
+    return { outcome: 'ignored', reason: 'citation not pending' };
+  }
+  // NOTE: no audit-log row here — AuditLog.admin_id is NOT NULL and an
+  // online payment has no admin actor; the payment_session_id reference
+  // plus the driver notification form the trail.
+  return { outcome: 'settled' };
+}
+
+/**
  * POST /payments/webhook — Xendit session/payment event receiver.
  * Public route: authorized by the x-callback-token header, NOT user JWT.
- * Settles ONLY after: token → session COMPLETED → payment SUCCEEDED →
- * PHP + exact amount match → known channel → citation still pending.
- * Everything else is a safe 200 no-op so Xendit stops retrying.
+ * Settles ONLY via settleOnlineSession; everything else is a safe 200
+ * no-op so Xendit stops retrying.
  */
 async function handleWebhook(req, res, next) {
   try {
@@ -159,129 +305,79 @@ async function handleWebhook(req, res, next) {
 
     const { event, data = {} } = req.body || {};
     if (!isCompletedEvent(event)) {
-      // Expired/failed/payment-object events: acknowledge, change nothing.
+      // Expired event: acknowledge, change nothing. (expired is the only
+      // other session event Xendit sends.)
       return success(res, null, `Ignored event ${event || 'unknown'}`);
     }
 
-    const paymentSessionId = data.payment_session_id;
-    if (!paymentSessionId) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] completed webhook without payment_session_id');
-      return success(res, null, 'Ignored: no session reference');
+    const result = await settleOnlineSession(data.payment_session_id);
+    if (result.outcome === 'settled') {
+      return success(res, null, 'Citation settled');
     }
+    if (result.outcome === 'error') {
+      return fail(res, result.reason, 502);
+    }
+    return success(res, null, `Ignored: ${result.reason}`);
+  } catch (err) {
+    next(err);
+  }
+}
 
-    // 1) Authoritative session check — COMPLETED required.
-    let session;
-    try {
-      session = await xendit.getPaymentSession(paymentSessionId);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[payments] session lookup failed:', err.message);
-      return fail(res, 'Unable to verify payment session', 502);
-    }
-    if (session?.status !== 'COMPLETED') {
-      return success(res, null, 'Ignored: session not completed');
-    }
+// Reconcile throttle (15s per citation): status checks hit Xendit's API, so
+// tab-focus storms must not fan out. Separate from the checkout throttle so
+// checking never blocks creating.
+const STATUS_THROTTLE_MS = 15 * 1000;
+const lastStatusAt = new Map();
 
-    // 2) Independent payment check — SUCCEEDED required.
-    const paymentId = session.payment_id || data.payment_id;
-    if (!paymentId) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] completed session without payment_id:', paymentSessionId);
-      return success(res, null, 'Ignored: no payment reference');
-    }
-    let payment;
-    try {
-      payment = await xendit.getPayment(paymentId);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[payments] payment lookup failed:', err.message);
-      return fail(res, 'Unable to verify payment', 502);
-    }
-    if (payment?.status !== 'SUCCEEDED') {
-      return success(res, null, 'Ignored: payment not succeeded');
-    }
-    if (String(payment.currency || '').toUpperCase() !== 'PHP') {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] non-PHP payment:', payment.currency, paymentSessionId);
-      return success(res, null, 'Ignored: currency mismatch');
-    }
+/** Xendit session ids look like `ps-<alphanumeric>` — never trust a manual reference. */
+function isSessionReference(value) {
+  return /^ps-[A-Za-z0-9]+$/.test(String(value || ''));
+}
 
-    // 3) Correlate to citation via our stable reference prefix.
-    const citationId = xendit.parseCitationIdFromReference(session.reference_id);
-    if (!citationId) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] unparseable reference_id:', session.reference_id);
-      return success(res, null, 'Ignored: unknown reference');
-    }
+/**
+ * GET /payments/citations/:id/status — driver re-verifies their own pending
+ * citation against Xendit (covers webhook outage/delay: the driver returning
+ * from hosted checkout triggers this on tab focus). Settles through the same
+ * gated core when the payment completed; otherwise returns settled:false so
+ * the app just refreshes and keeps showing pending.
+ */
+async function getCheckoutStatus(req, res, next) {
+  try {
+    const citationId = parseId(req.params.id);
+    const citation = citationId === null
+      ? null
+      : await prisma.citation.findUnique({ where: { citationId } });
+    if (!citation) return fail(res, 'Citation not found', 404);
 
-    // Prisma has no SELECT ... FOR UPDATE: read the row first (cheap
-    // pre-checks) and then settle through a conditional updateMany whose
-    // affected-row count is the concurrency gate — exactly one webhook can
-    // move the row out of 'pending'.
-    const citation = await prisma.citation.findUnique({ where: { citationId } });
-    if (!citation) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] citation not found:', citationId);
-      return success(res, null, 'Ignored: citation not found');
+    // A driver may only check their own citation.
+    if (citation.driverId !== req.user.id) {
+      return fail(res, 'You are not authorized to view this citation', 403);
+    }
+    if (citation.settlementStatus === 'settled') {
+      return success(res, { settled: true }, 'Citation already settled');
     }
     if (citation.settlementStatus !== 'pending') {
-      // Duplicate/late webhook for an already-settled/cancelled record.
-      return success(res, null, 'Ignored: citation not pending');
+      return success(res, { settled: false }, 'Citation cannot be paid');
+    }
+    if (!isSessionReference(citation.paymentReference)) {
+      return success(res, { settled: false }, 'No online session to verify');
     }
 
-    // 4) Exact amount match against the server-side fine.
-    const expected = Math.round(toNumber(citation.fineAmount));
-    const paid = Math.round(Number(payment.request_amount ?? session.amount));
-    if (!Number.isFinite(paid) || paid !== expected) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] amount mismatch:', { citationId, expected, paid });
-      return success(res, null, 'Ignored: amount mismatch');
+    const now = Date.now();
+    const last = lastStatusAt.get(citationId);
+    if (last && now - last < STATUS_THROTTLE_MS) {
+      return success(res, { settled: false }, 'Verification requested too recently');
     }
+    lastStatusAt.set(citationId, now);
 
-    // 5) Known channel only — never guess.
-    const method = mapChannelToMethod(payment.channel_code);
-    if (!method) {
-      // eslint-disable-next-line no-console
-      console.warn('[payments] unknown channel_code:', payment.channel_code, paymentSessionId);
-      return success(res, null, 'Ignored: unknown channel');
+    const result = await settleOnlineSession(citation.paymentReference);
+    if (result.outcome === 'settled') {
+      return success(res, { settled: true }, 'Citation settled');
     }
-
-    const settled = await prisma.$transaction(async (tx) => {
-      // The WHERE clause re-checks `settlementStatus: 'pending'`, so a
-      // concurrent/late webhook matches 0 rows and becomes a no-op instead
-      // of double-settling the citation.
-      const { count } = await tx.citation.updateMany({
-        where: { citationId, settlementStatus: 'pending' },
-        data: {
-          settlementStatus: 'settled',
-          settledAt: new Date(),
-          paymentMethod: method,
-          paymentReference: paymentSessionId,
-          receivedBy: null, // online payment — no admin/staff handler
-        },
-      });
-      if (count === 0) return false;
-
-      await notifyDriver(
-        {
-          driverId: citation.driverId,
-          citationId: citation.citationId,
-          message: `Your online payment for citation ${citation.citationNumber} has been confirmed. Thank you!`,
-          notificationType: 'settlement_confirmed',
-        },
-        { transaction: tx }
-      );
-      return true;
-    });
-
-    if (!settled) {
-      return success(res, null, 'Ignored: citation not pending');
+    if (result.outcome === 'error') {
+      return fail(res, result.reason, 502);
     }
-    // NOTE: no audit-log row here — AuditLog.admin_id is NOT NULL and a
-    // webhook has no admin actor; the payment_session_id reference plus
-    // the driver notification form the trail.
-    return success(res, null, 'Citation settled');
+    return success(res, { settled: false }, `Not settled: ${result.reason}`);
   } catch (err) {
     next(err);
   }

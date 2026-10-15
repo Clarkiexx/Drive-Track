@@ -33,6 +33,11 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   const [isPaying, setIsPaying] = useState(false);
   const [payError, setPayError] = useState("");
   const [sessionOpened, setSessionOpened] = useState(false);
+  /**
+   * The live Xendit checkout for this citation. Reused while unexpired so
+   * repeat taps re-open the SAME link instead of spawning duplicate tabs.
+   */
+  const [activeCheckout, setActiveCheckout] = useState<{ url: string; expiresAt: number } | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -77,26 +82,47 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     return false;
   }
 
+  /**
+   * Opens a checkout URL in a new tab, falling back to same-tab navigation
+   * when the browser blocks the popup.
+   */
+  function openCheckout(url: string) {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+
+    // A null handle means the browser blocked the popup. Hand the navigation
+    // to this tab instead of leaving the driver with nothing happening.
+    if (!opened) {
+      window.location.assign(url);
+    }
+  }
+
   async function handlePayNow() {
     if (isPaying) return;
+
+    // One Xendit link per citation: while the stored session is still live
+    // (backend expiry is 30 minutes), re-open it instead of creating another.
+    if (activeCheckout && activeCheckout.expiresAt > Date.now()) {
+      openCheckout(activeCheckout.url);
+      return;
+    }
+    if (activeCheckout) setActiveCheckout(null);
+
     setIsPaying(true);
     setPayError("");
 
     try {
-      const { checkoutUrl } = await paymentService.createCheckout(id);
+      const { checkoutUrl, expiresAt } = await paymentService.createCheckout(id);
 
       // Hosted Xendit checkout, replacing expo-web-browser's
       // openBrowserAsync. Returning from the tab never settles anything on its
       // own — settlement only arrives via the verified server webhook, which is
       // why the reload below can still show "pending".
-      const opened = window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-
-      // A null handle means the browser blocked the popup. Hand the navigation
-      // to this tab instead of leaving the driver with nothing happening.
-      if (!opened) {
-        window.location.assign(checkoutUrl);
-        return;
-      }
+      const parsedExpiry = expiresAt ? Date.parse(expiresAt) : NaN;
+      setActiveCheckout({
+        url: checkoutUrl,
+        expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 30 * 60 * 1000,
+      });
+      openCheckout(checkoutUrl);
 
       setSessionOpened(true);
     } catch (error) {
@@ -166,6 +192,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
               citation={citation}
               isPaying={isPaying}
               payError={payError}
+              canResume={Boolean(activeCheckout)}
               awaitingConfirmation={
                 sessionOpened && citation.settlementStatus === "pending" && !isPaying && !payError
               }
@@ -182,12 +209,13 @@ type ReceiptProps = {
   citation: CitationRecord;
   isPaying: boolean;
   payError: string;
+  canResume: boolean;
   awaitingConfirmation: boolean;
   onPay: () => void;
 };
 
 /** The receipt card, laid out in the same order as ViolationDetailScreen. */
-function Receipt({ citation, isPaying, payError, awaitingConfirmation, onPay }: ReceiptProps) {
+function Receipt({ citation, isPaying, payError, canResume, awaitingConfirmation, onPay }: ReceiptProps) {
   const violationDescriptions = (citation.violations ?? [])
     .map((entry) => entry.violationType?.description)
     .filter((description): description is string => Boolean(description));
@@ -244,7 +272,7 @@ function Receipt({ citation, isPaying, payError, awaitingConfirmation, onPay }: 
                   disabled={isPaying}
                   className="w-full rounded-[10px] bg-brand-500 py-3 text-[15px] font-bold text-white transition-colors hover:bg-brand-600 disabled:opacity-60"
                 >
-                  {isPaying ? "Starting payment…" : "💳 Pay Now"}
+                  {isPaying ? "Starting payment…" : canResume ? "↗ Resume payment" : "💳 Pay Now"}
                 </button>
                 {payError ? (
                   <p className="text-[12px] leading-snug text-center text-signal-stop">{payError}</p>

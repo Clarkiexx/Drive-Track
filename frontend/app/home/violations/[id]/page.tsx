@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
 
 import AppBar from "@/components/common/AppBar";
@@ -24,6 +24,46 @@ type ViolationDetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+/** Name of the single Xendit checkout tab (shared across reloads). */
+const CHECKOUT_WINDOW_NAME = "drivetrack-xendit-checkout";
+
+/** localStorage prefix for the live checkout session, keyed by citation id. */
+const CHECKOUT_STORAGE_PREFIX = "drivetrack:checkout:";
+
+type StoredCheckout = { url: string; expiresAt: number };
+
+/**
+ * Reads the live checkout session for a citation, surviving reloads and
+ * revisits. Returns null when absent, malformed, or expired (expired entries
+ * are removed so they can never be re-opened).
+ */
+function readStoredCheckout(citationId: string | number): StoredCheckout | null {
+  try {
+    const raw = window.localStorage.getItem(`${CHECKOUT_STORAGE_PREFIX}${citationId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { url?: unknown; expiresAt?: unknown };
+    if (typeof parsed.url !== "string" || typeof parsed.expiresAt !== "number") return null;
+    if (parsed.expiresAt <= Date.now()) {
+      window.localStorage.removeItem(`${CHECKOUT_STORAGE_PREFIX}${citationId}`);
+      return null;
+    }
+    return { url: parsed.url, expiresAt: parsed.expiresAt };
+  } catch {
+    // Storage unavailable (private mode) or corrupt entry — in-memory state
+    // is enough for the single-visit case.
+    return null;
+  }
+}
+
+/** Persists the live checkout session (best-effort; failures are ignored). */
+function writeStoredCheckout(citationId: string | number, checkout: StoredCheckout) {
+  try {
+    window.localStorage.setItem(`${CHECKOUT_STORAGE_PREFIX}${citationId}`, JSON.stringify(checkout));
+  } catch {
+    // Ignore — the in-memory copy still dedupes within this visit.
+  }
+}
+
 export default function ViolationDetailPage({ params }: ViolationDetailPageProps) {
   const { id } = use(params);
 
@@ -38,6 +78,11 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
    * repeat taps re-open the SAME link instead of spawning duplicate tabs.
    */
   const [activeCheckout, setActiveCheckout] = useState<{ url: string; expiresAt: number } | null>(null);
+  /**
+   * Handle of the opened checkout tab (same page lifetime only). When it is
+   * still open we focus it instead of opening another tab.
+   */
+  const checkoutTabRef = useRef<Window | null>(null);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -46,6 +91,21 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     try {
       const record = await citationService.getCitation(id);
       setCitation(record);
+      if (record.settlementStatus !== "pending") {
+        // Settled/cancelled: the stored link is done — drop it so a stale
+        // URL can never be re-opened.
+        try {
+          window.localStorage.removeItem(`${CHECKOUT_STORAGE_PREFIX}${id}`);
+        } catch {
+          // Storage unavailable (private mode) — in-memory state is enough.
+        }
+        checkoutTabRef.current = null;
+        setActiveCheckout(null);
+      } else {
+        // Rehydrate the live session so a refresh or revisit reuses the same
+        // Xendit link instead of spawning a duplicate tab.
+        setActiveCheckout(readStoredCheckout(id));
+      }
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error, "Unable to load this record."));
     } finally {
@@ -83,15 +143,34 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   }
 
   /**
-   * Opens a checkout URL in a new tab, falling back to same-tab navigation
-   * when the browser blocks the popup.
+   * Opens a checkout URL with exactly one tab. An already-open tab from this
+   * page lifetime is focused without reloading (in-progress input is kept);
+   * otherwise the shared named tab is reused — the browser navigates the
+   * existing tab instead of opening another, even across reloads. Only when
+   * the browser blocks the popup entirely do we navigate this tab instead.
    */
-  function openCheckout(url: string) {
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
-
-    // A null handle means the browser blocked the popup. Hand the navigation
-    // to this tab instead of leaving the driver with nothing happening.
-    if (!opened) {
+  function openCheckout(url: string, reuse: boolean) {
+    const existing = checkoutTabRef.current;
+    if (reuse && existing && !existing.closed) {
+      existing.focus();
+      return;
+    }
+    // Named target: reuses the checkout tab from an earlier tap (possibly
+    // from before a reload) instead of spawning a duplicate.
+    const named = window.open(url, CHECKOUT_WINDOW_NAME);
+    if (named) {
+      checkoutTabRef.current = named;
+      try {
+        named.focus();
+      } catch {
+        // Focus is best-effort (background tabs); the single tab holds.
+      }
+      return;
+    }
+    if (!reuse) {
+      // Fresh session but the popup was blocked: hand the navigation to this
+      // tab instead of leaving the driver with nothing happening. Never do
+      // this on reuse — the checkout tab already exists.
       window.location.assign(url);
     }
   }
@@ -100,9 +179,10 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     if (isPaying) return;
 
     // One Xendit link per citation: while the stored session is still live
-    // (backend expiry is 30 minutes), re-open it instead of creating another.
+    // (backend expiry is 30 minutes, persisted across reloads), re-open it
+    // instead of creating another.
     if (activeCheckout && activeCheckout.expiresAt > Date.now()) {
-      openCheckout(activeCheckout.url);
+      openCheckout(activeCheckout.url, true);
       return;
     }
     if (activeCheckout) setActiveCheckout(null);
@@ -118,11 +198,13 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       // own — settlement only arrives via the verified server webhook, which is
       // why the reload below can still show "pending".
       const parsedExpiry = expiresAt ? Date.parse(expiresAt) : NaN;
-      setActiveCheckout({
+      const checkout = {
         url: checkoutUrl,
         expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 30 * 60 * 1000,
-      });
-      openCheckout(checkoutUrl);
+      };
+      setActiveCheckout(checkout);
+      writeStoredCheckout(id, checkout);
+      openCheckout(checkoutUrl, false);
 
       setSessionOpened(true);
     } catch (error) {

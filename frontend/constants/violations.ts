@@ -82,3 +82,19 @@ export const BLOCKED_AT_LOGIN: readonly VerificationStatus[] = [
 /* --- backend/prisma/schema.prisma: enum PaymentMethod --------------------- */
 export const PAYMENT_METHODS = ["cash", "gcash", "maya", "bank", "other"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/** Driver/admin-facing labels for the payment method enum. */
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: "Cash",
+  gcash: "GCash",
+  maya: "Maya",
+  bank: "Bank",
+  other: "Card",
+};
+
+export function paymentMethodLabel(method: string | null | undefined): string {
+  if (method === "cash" || method === "gcash" || method === "maya" || method === "bank" || method === "other") {
+    return PAYMENT_METHOD_LABELS[method];
+  }
+  return "Cash";
+}

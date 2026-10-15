@@ -35,8 +35,10 @@ function toSource(passage) {
  * Phase 1 RAG pipeline (all approved content, no personal data, stateless):
  *   1. Fast path — the pre-RAG keyword match answers verbatim (byte-identical
  *      legacy behavior) plus verifiable sources.
- *   2. Retrieval + sufficiency gate — a relevant non-legacy match answers
- *      from its curated passage; below the floor, the default answer.
+ *   2. Retrieval + sufficiency gate — vector search first (Phase 2,
+ *      pgvector), keyword scorer as its fallback; a relevant non-legacy
+ *      match answers from its curated passage; below the floor, the
+ *      default answer.
  *   3. Generative zone — structural only until LLM credentials exist (the
  *      reported Phase 1 blocker): with a provider configured, generation
  *      runs grounded on the ranked passages; any generative failure degrades
@@ -61,7 +63,23 @@ async function ask(req, res) {
     );
   }
 
-  const { ranked, sufficient } = retrievalService.retrieve(message);
+  // Phase 2: semantic (pgvector) retrieval first — embeds the question and
+  // ranks seeded `knowledge_base` passages. Vector retrieval is best-effort
+  // only: on ANY failure (LLM key missing, table not seeded, network, empty
+  // vector) it degrades to the synchronous keyword scorer below, so a chat
+  // answer always falls back, it never fails the request.
+  let ranked;
+  let sufficient;
+  try {
+    const vectorResult = await retrievalService.retrieveAsync(message);
+    ranked = vectorResult.ranked;
+    sufficient = vectorResult.sufficient;
+  } catch {
+    const syncResult = retrievalService.retrieve(message);
+    ranked = syncResult.ranked;
+    sufficient = syncResult.sufficient;
+  }
+
   if (!sufficient) {
     return success(
       res,

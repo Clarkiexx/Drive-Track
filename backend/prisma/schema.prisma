@@ -318,3 +318,36 @@ model AuditLog {
 
   @@map("audit_logs")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 — pgvector RAG knowledge base (grounded chatbot passages).
+//
+// The TABLE is created at RUNTIME by src/repositories/knowledgeRepository.js
+// (`CREATE TABLE IF NOT EXISTS`), never by `prisma db push` / `migrate`: the
+// live Neon database has known unrelated drift and migration tooling must
+// not touch it. This model is appended only so `npx prisma generate` emits
+// types — raw SQL owns the schema.
+//
+//  - tags     TEXT[]       — approved topic categories from chatKnowledge.js
+//                            (Prisma has no optional-list type — P1012 — so
+//                            this is modelled as a required `String[]`)
+//  - metadata JSONB        — authority / locator / docId used for sources[]
+//  - embedding vector(768) — gemini-embedding-001, 768 dims (see
+//                            src/services/embeddingService.js; the reference
+//                            implementation's text-embedding-004 was shut
+//                            down Jan 2026)
+// No vector index: the corpus is tiny, a sequential scan is intentional.
+model KnowledgeBase {
+  id        String                    @id
+  question  String?
+  answer    String?
+  category  String?
+  tags      String[]
+  metadata  Json?
+  embedding Unsupported("vector(768)")?
+  isActive  Boolean?                  @default(true) @map("is_active")
+  createdAt DateTime?                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime?                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("knowledge_base")
+}

@@ -7,8 +7,25 @@ const llmService = require('../services/llmService');
 // eslint-disable-next-line no-console
 if (!llmService.isConfigured()) console.warn('[chatbot] RAG generative answers disabled: LLM_API_KEY is not set. Curated passages only.');
 
-const DEFAULT_ANSWER =
+const DEFAULT_ANSWER_FALLBACK =
   "I'm not sure how to help with that specific question yet. For anything not covered here, please visit the CTMO office or call our hotline during office hours.";
+
+/**
+ * Out-of-RAG fallback answer, generated from RAG knowledge (not hardcoded
+ * contact details): the office-head passage supplies the name, number, and
+ * building, so the message stays in sync with the knowledge base. Falls
+ * back to the generic wording only if that passage is ever missing.
+ */
+function buildFallbackAnswer() {
+  const office = retrievalService.findPassageById
+    ? retrievalService.findPassageById('faq-office-head')
+    : null;
+  if (!office || !office.text) return DEFAULT_ANSWER_FALLBACK;
+  return (
+    "That question isn't covered in my official guides. " +
+    `You can contact the CTMO directly: ${office.text}`
+  );
+}
 
 const QUICK_QUESTIONS = [
   'How to settle violations?',
@@ -83,7 +100,7 @@ async function ask(req, res) {
   if (!sufficient) {
     return success(
       res,
-      { answer: DEFAULT_ANSWER, quickQuestions: QUICK_QUESTIONS, sources: [] }
+      { answer: buildFallbackAnswer(), quickQuestions: QUICK_QUESTIONS, sources: [] }
     );
   }
 

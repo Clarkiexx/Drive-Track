@@ -181,10 +181,20 @@ async function retrieveAsync(message, limit = DEFAULT_LIMIT) {
   };
 }
 
+/**
+ * Lookup by passage id (used for RAG-grounded system messages such as the
+ * out-of-RAG fallback, which quotes the office contact passage instead of
+ * hardcoding contact details). Returns the passage or null.
+ */
+function findPassageById(id) {
+  return repository.listActivePassages().find((passage) => passage.id === id) || null;
+}
+
 module.exports = {
   retrieve,
   retrieveAsync,
   findLegacyMatch,
+  findPassageById,
   scoreAll,
   SUFFICIENCY_FLOOR,
   VECTOR_SUFFICIENCY_FLOOR,

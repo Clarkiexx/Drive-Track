@@ -15,11 +15,11 @@ const app = express();
 // but both BROWSER clients are: the Next.js PWA on :3000 and the Vite admin
 // dashboard on :5173. Both defaults are listed so a fresh checkout works without
 // editing .env; a real deployment should set CORS_ORIGIN explicitly.
-// const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
-//   .split(',')
-//   .map((o) => o.trim())
-//   .filter(Boolean);
-app.use(cors({ origin: process.env.CORS_ORIGIN }));
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

@@ -13,7 +13,7 @@ import {
   formatShortDate,
 } from "@/components/common/dates";
 import useClientNow from "@/components/common/useClientNow";
-import { PAYMENT_METHODS, type PaymentMethod } from "@/constants/violations";
+import { PAYMENT_METHODS, paymentMethodLabel, type PaymentMethod } from "@/constants/violations";
 import { useAuth } from "@/context/AuthContext";
 import { getApiErrorMessage } from "@/lib/axios";
 import {
@@ -385,7 +385,7 @@ export default function AdminSettlementsPage() {
                         </td>
                         <td className="px-5 py-3.5 align-top text-[12.5px] text-ink/80">
                           {citation.settlementStatus === "settled"
-                            ? `${citation.paymentMethod || "cash"}${citation.paymentReference ? ` • ${citation.paymentReference}` : ""}`
+                            ? `${paymentMethodLabel(citation.paymentMethod)}${citation.paymentReference ? ` • ${citation.paymentReference}` : ""}`
                             : "—"}
                         </td>
                         <td className="px-5 py-3.5 align-top">

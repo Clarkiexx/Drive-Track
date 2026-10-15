@@ -24,6 +24,9 @@ type ViolationDetailPageProps = {
   params: Promise<{ id: string }>;
 };
 
+/** Name of the single Xendit checkout tab (shared across reloads). */
+const CHECKOUT_WINDOW_NAME = "drivetrack-xendit-checkout";
+
 /** localStorage prefix for the live checkout session, keyed by citation id. */
 const CHECKOUT_STORAGE_PREFIX = "drivetrack:checkout:";
 
@@ -140,9 +143,11 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   }
 
   /**
-   * Opens a checkout URL with exactly one tab: an already-open checkout tab
-   * is focused; otherwise a new tab is opened (same-tab navigation only when
-   * the browser blocks the popup).
+   * Opens a checkout URL with exactly one tab. An already-open tab from this
+   * page lifetime is focused without reloading (in-progress input is kept);
+   * otherwise the shared named tab is reused — the browser navigates the
+   * existing tab instead of opening another, even across reloads. Only when
+   * the browser blocks the popup entirely do we navigate this tab instead.
    */
   function openCheckout(url: string, reuse: boolean) {
     const existing = checkoutTabRef.current;
@@ -150,15 +155,24 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       existing.focus();
       return;
     }
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
-
-    // A null handle means the browser blocked the popup. Hand the navigation
-    // to this tab instead of leaving the driver with nothing happening.
-    if (!opened) {
-      window.location.assign(url);
+    // Named target: reuses the checkout tab from an earlier tap (possibly
+    // from before a reload) instead of spawning a duplicate.
+    const named = window.open(url, CHECKOUT_WINDOW_NAME);
+    if (named) {
+      checkoutTabRef.current = named;
+      try {
+        named.focus();
+      } catch {
+        // Focus is best-effort (background tabs); the single tab holds.
+      }
       return;
     }
-    checkoutTabRef.current = opened;
+    if (!reuse) {
+      // Fresh session but the popup was blocked: hand the navigation to this
+      // tab instead of leaving the driver with nothing happening. Never do
+      // this on reuse — the checkout tab already exists.
+      window.location.assign(url);
+    }
   }
 
   async function handlePayNow() {

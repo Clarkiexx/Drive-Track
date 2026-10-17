@@ -1,15 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
 import ChipRow, { type ChipOption } from "@/components/common/ChipRow";
+import EmptyState from "@/components/common/EmptyState";
 import FilterBar from "@/components/common/FilterBar";
 import PageBody from "@/components/common/PageBody";
 import SignShape from "@/components/common/SignShape";
-import { SIGN_CATEGORIES, trafficSigns, type SignCategory } from "@/data/trafficSigns";
+import {
+  SIGN_CATEGORIES,
+  trafficSigns,
+  type SignCategory,
+  type TrafficSign,
+} from "@/data/trafficSigns";
+import { learningService } from "@/services/learning.service";
 
 /** The "no filter" chip, plus one per category actually present in the data. */
 const CATEGORY_OPTIONS: ChipOption[] = [
@@ -24,16 +31,40 @@ type CategoryFilter = "All" | SignCategory;
  *
  * A pushed screen inside the driver shell: AppBar with a back arrow, a chip
  * strip that filters the catalogue, and a card per sign.
+ *
+ * Content is the admin-managed catalogue (GET /learning/signs?active=true).
+ * The bundled copy renders immediately and stays whenever the API cannot be
+ * reached, so the screen never waits on the network to show something; a
+ * successful fetch makes the live rows the only source of truth (an empty
+ * live catalogue really means "nothing published", not "offline").
  */
 export default function LearningCenterPage() {
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("All");
+  const [signs, setSigns] = useState<TrafficSign[]>(trafficSigns);
+
+  useEffect(() => {
+    let cancelled = false;
+    learningService
+      .listActiveSigns()
+      .then((rows) => {
+        // LearningSignRecord is a superset of TrafficSign — the live
+        // catalogue replaces the bundled one wholesale.
+        if (!cancelled) setSigns(rows);
+      })
+      .catch(() => {
+        // Offline or API down: keep the bundled (seed) catalogue.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filteredSigns = useMemo(
     () =>
       activeCategory === "All"
-        ? trafficSigns
-        : trafficSigns.filter((sign) => sign.category === activeCategory),
-    [activeCategory]
+        ? signs
+        : signs.filter((sign) => sign.category === activeCategory),
+    [activeCategory, signs]
   );
 
   return (
@@ -52,32 +83,38 @@ export default function LearningCenterPage() {
       {/* withNav={false}: the sticky quiz bar below already reserves the tab-bar
           height via pb-nav-safe, so the default pb-nav would double the gap. */}
       <PageBody withNav={false} className="pt-4">
-        <ul className="flex flex-col gap-3">
-          {filteredSigns.map((sign, index) => (
-            <li
-              key={sign.id}
-              className="rise-sm flex items-center gap-3.5 rounded-xl border border-hairline bg-surface p-4"
-              style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}
-            >
-              {/* 48px plate, same as the RN signShapeWrap. */}
-              <span className="grid size-12 shrink-0 place-items-center">
-                <SignShape
-                  shape={sign.shape}
-                  color={sign.color}
-                  glyph={sign.glyph}
-                  prohibited={sign.prohibited}
-                  solid={sign.solid}
-                />
-              </span>
+        {filteredSigns.length === 0 ? (
+          <EmptyState title="No signs to study yet">
+            The catalogue is being updated — check back soon.
+          </EmptyState>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {filteredSigns.map((sign, index) => (
+              <li
+                key={sign.id}
+                className="rise-sm flex items-center gap-3.5 rounded-xl border border-hairline bg-surface p-4"
+                style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}
+              >
+                {/* 48px plate, same as the RN signShapeWrap. */}
+                <span className="grid size-12 shrink-0 place-items-center">
+                  <SignShape
+                    shape={sign.shape}
+                    color={sign.color}
+                    glyph={sign.glyph}
+                    prohibited={sign.prohibited}
+                    solid={sign.solid}
+                  />
+                </span>
 
-              <div className="min-w-0 flex-1">
-                <p className="text-[15px] leading-tight font-bold text-ink">{sign.name}</p>
-                <p className="mt-px mb-1 text-[11px] text-muted">{sign.category}</p>
-                <p className="text-[12px] leading-[17px] text-muted">{sign.meaning}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[15px] leading-tight font-bold text-ink">{sign.name}</p>
+                  <p className="mt-px mb-1 text-[11px] text-muted">{sign.category}</p>
+                  <p className="text-[12px] leading-[17px] text-muted">{sign.meaning}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
 
         {/* Sticky rather than absolutely positioned: the RN screen pinned the
             button to the viewport bottom (bottom: 20) with 100px of scroll

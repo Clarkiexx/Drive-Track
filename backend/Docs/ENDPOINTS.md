@@ -77,6 +77,19 @@
 | PATCH | `/api/v1/violation-types/:id` | Bearer + role | admin | Partial update — all fields optional |
 | PATCH | `/api/v1/violation-types/:id/status` | Bearer + role | admin | |
 
+## Learning Center — `src/routes/learningRoutes.js` (router-level `authenticate`)
+
+| Method | Path | Auth | Roles | Notes |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/learning/signs` | Bearer | driver, enforcer, admin | `?active=true` narrows to the rows the driver app shows |
+| POST | `/api/v1/learning/signs` | Bearer + role | admin | Id is the slugified name (`no-left-turn-2` on collision) |
+| PATCH | `/api/v1/learning/signs/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/signs/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) — nothing is hard-deleted |
+| GET | `/api/v1/learning/quiz` | Bearer | driver, enforcer, admin | Each row carries the embedded `sign`; `?active=true` also hides rows whose sign is archived |
+| POST | `/api/v1/learning/quiz` | Bearer + role | admin | |
+| PATCH | `/api/v1/learning/quiz/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/quiz/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) |
+
 ## Notifications — `src/routes/notificationRoutes.js` (router-level `authenticate`)
 
 | Method | Path | Auth | Roles |
@@ -104,6 +117,7 @@
 | POST | `/api/v1/payments/webhook` | Public | — | Xendit callback, authorized by `x-callback-token`, never by JWT |
 | GET | `/api/v1/payments/return` | Public | — | Browser return page; settles nothing |
 | POST | `/api/v1/payments/citations/:id/checkout` | Bearer + role | driver | |
+| GET | `/api/v1/payments/citations/:id/status` | Bearer + role | driver | Reconcile-on-return probe: re-checks the Xendit session and settles if paid |
 
 ## Dashboard — `src/routes/dashboardRoutes.js` (router-level `authenticate` + `allowRoles('admin')`)
 

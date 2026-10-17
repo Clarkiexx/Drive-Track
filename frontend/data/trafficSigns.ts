@@ -1,6 +1,8 @@
-// Reference data for the Learning Center + Quiz. Kept simple and
-// local (no backend) per the spec — this is an educational feature
-// independent of citation management.
+// Reference data for the Learning Center + Quiz — originally kept local
+// (no backend) per the spec, since this is an educational feature
+// independent of citation management. Since Phase 5 the catalogue is
+// admin-managed (learning_signs / learning_quiz_questions): this file is
+// the seed source (backend/seed-learning.js) and the offline fallback.
 //
 // Originally ported from driver-app/src/data/trafficSigns.js (13 signs with
 // bare shape plates). Extended with the standard Philippine sign set — names
@@ -12,8 +14,9 @@
 // CTMO policy — have them cross-checked against the LTO driver's manual
 // before treating them as authoritative.
 //
-// Nothing here talks to the API: the catalogue ships with the bundle, so the
-// Learning Center and the Quiz work with no network at all. The `color` field
+// The driver Learning Center and Quiz read the live admin-managed rows first
+// and fall back to these bundled copies only when the API is unreachable, so
+// the screens still work with no network. The `color` field
 // is deliberately kept as a raw hex — a traffic-sign catalogue is only useful
 // if the signs look like the real thing, so this is data, not styling, and
 // must not be folded into a palette token.
@@ -23,65 +26,68 @@ export const SIGN_SHAPES = ["octagon", "circle", "triangle", "rectangle", "inver
 export type SignShape = (typeof SIGN_SHAPES)[number];
 
 /** Pictogram drawn inside the plate. Implemented in SignShape.tsx. */
-export type SignGlyph =
-  | "stop-text"
-  | "yield-text"
-  | "bar"
-  | "letter-p"
-  | "letter-h"
-  | "speed-100"
-  | "arrow-up"
-  | "arrow-left"
-  | "arrow-right"
-  | "u-turn"
-  | "two-cars"
-  | "horn"
-  | "pedestrian"
-  | "school"
-  | "car"
-  | "bike"
-  | "phone"
-  | "cigarette"
-  | "pump"
-  | "dim-width"
-  | "dim-height"
-  | "dim-load"
-  | "w-arrow-left"
-  | "w-arrow-right"
-  | "w-keep-left"
-  | "w-keep-right"
-  | "w-pass-either"
-  | "lights"
-  | "roundabout"
-  | "narrow"
-  | "hump"
-  | "cross"
-  | "t-junction"
-  | "side-right"
-  | "side-left"
-  | "bend-left"
-  | "bend-right"
-  | "slope-down"
-  | "slope-up"
-  | "merge"
-  | "rails"
-  | "bridge"
-  | "rocks"
-  | "barricade"
-  | "handset"
-  | "rest"
-  | "police"
-  | "train"
-  | "utensils"
-  | "plane"
-  | "anchor"
-  | "med-star"
-  | "bus"
-  | "park-ride"
-  | "area-closed"
-  | "skid"
-  | "curve"
-  | "cycle-lane";
+export const SIGN_GLYPHS = [
+  "stop-text",
+  "yield-text",
+  "bar",
+  "letter-p",
+  "letter-h",
+  "speed-100",
+  "arrow-up",
+  "arrow-left",
+  "arrow-right",
+  "u-turn",
+  "two-cars",
+  "horn",
+  "pedestrian",
+  "school",
+  "car",
+  "bike",
+  "phone",
+  "cigarette",
+  "pump",
+  "dim-width",
+  "dim-height",
+  "dim-load",
+  "w-arrow-left",
+  "w-arrow-right",
+  "w-keep-left",
+  "w-keep-right",
+  "w-pass-either",
+  "lights",
+  "roundabout",
+  "narrow",
+  "hump",
+  "cross",
+  "t-junction",
+  "side-right",
+  "side-left",
+  "bend-left",
+  "bend-right",
+  "slope-down",
+  "slope-up",
+  "merge",
+  "rails",
+  "bridge",
+  "rocks",
+  "barricade",
+  "handset",
+  "rest",
+  "police",
+  "train",
+  "utensils",
+  "plane",
+  "anchor",
+  "med-star",
+  "bus",
+  "park-ride",
+  "area-closed",
+  "skid",
+  "curve",
+  "cycle-lane",
+] as const;
+
+export type SignGlyph = (typeof SIGN_GLYPHS)[number];
 
 /** Groups the Learning Center filter chips are built from. */
 export const SIGN_CATEGORIES = ["Regulatory", "Warning", "Informational"] as const;

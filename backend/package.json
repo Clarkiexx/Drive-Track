@@ -14,7 +14,8 @@
     "seed:admin": "tsx seed-admin.js",
     "seed:enforcer": "tsx seed-enforcer.js",
     "seed:violation-types": "tsx seed-violation-types.js",
-    "seed:knowledge": "tsx seed-knowledge.js"
+    "seed:knowledge": "tsx seed-knowledge.js",
+    "seed:learning": "tsx seed-learning.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

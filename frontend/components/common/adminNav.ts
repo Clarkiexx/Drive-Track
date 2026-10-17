@@ -1,6 +1,7 @@
 import {
   Bell,
   CreditCard,
+  GraduationCap,
   LayoutDashboard,
   NotebookPen,
   ScrollText,
@@ -63,6 +64,13 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     label: "Violation Types",
     Icon: Tags,
     blurb: "Maintain the offence catalogue and the fines attached to it.",
+    ready: true,
+  },
+  {
+    slug: "learning",
+    label: "Learning Center",
+    Icon: GraduationCap,
+    blurb: "Maintain the road-sign catalogue and quiz questions drivers study.",
     ready: true,
   },
   {

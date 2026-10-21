@@ -126,7 +126,7 @@ module.exports = {
   returnPage,
   // Exported for verification/testing; webhook + return page land in 4.2.
   _throttle: { isThrottled, markCheckout, CHECKOUT_THROTTLE_MS },
-  _helpers: { verifyCallbackToken, isCompletedEvent, mapChannelToMethod },
+  _helpers: { verifyCallbackToken, isCompletedEvent, mapChannelToMethod, settleOnlineSession },
 };
 
 /** True only for the session-completed lifecycle event. */
@@ -146,9 +146,13 @@ function verifyCallbackToken(req) {
 
 /**
  * Maps a verified Xendit channel_code to the Citation.paymentMethod enum.
- * Returns null for unknown codes — the caller must reject safely (no
- * settle, no guess). Exact activated codes are confirmed from the Xendit
- * dashboard during testing (D2); this allowlist is deliberately explicit.
+ * Known channels get a specific value; any other non-empty code (e.g.
+ * GrabPay, ShopeePay, a new e-wallet label) uses the catch-all 'other'.
+ * Returns null only when Xendit supplied no channel code at all.
+ *
+ * The payment itself has already been verified as SUCCEEDED with the exact
+ * amount and currency — the channel is display metadata, so an unfamiliar
+ * label must never leave a paid citation pending.
  */
 function mapChannelToMethod(channelCode) {
   const code = String(channelCode || '').toUpperCase().trim();
@@ -156,9 +160,9 @@ function mapChannelToMethod(channelCode) {
   if (code === 'MAYA' || code === 'PAYMAYA') return 'maya';
   if (code === 'CARDS') return 'other';
   // Bank-transfer VA-style codes (e.g. BPI_VA, BNI_VA) and explicit
-  // BANK_TRANSFER map to bank; anything else is unknown.
+  // BANK_TRANSFER map to bank.
   if (code === 'BANK_TRANSFER' || code.includes('BANK') || /_VA$/.test(code)) return 'bank';
-  return null;
+  return code ? 'other' : null;
 }
 
 /**

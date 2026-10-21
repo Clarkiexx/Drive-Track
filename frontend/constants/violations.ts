@@ -89,12 +89,12 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   gcash: "GCash",
   maya: "Maya",
   bank: "Bank",
-  other: "Card",
+  other: "Other",
 };
 
 export function paymentMethodLabel(method: string | null | undefined): string {
   if (method === "cash" || method === "gcash" || method === "maya" || method === "bank" || method === "other") {
     return PAYMENT_METHOD_LABELS[method];
   }
-  return "Cash";
+  return "Other";
 }

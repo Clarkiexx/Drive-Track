@@ -15,7 +15,7 @@ import {
   type EnforcerStatus,
 } from "@/services/enforcer.service";
 
-const PAGE_LIMIT = 10;
+const PAGE_LIMIT = 8;
 
 type StatusFilter = EnforcerStatus | "all";
 

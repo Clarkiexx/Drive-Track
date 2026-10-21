@@ -70,7 +70,7 @@ export const enforcerService = {
       enforcers: Array.isArray(data?.enforcers) ? data.enforcers : [],
       pagination: {
         page: Number(data?.pagination?.page) || Number(params.page) || 1,
-        limit: Number(data?.pagination?.limit) || Number(params.limit) || 10,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 8,
         total: Number(data?.pagination?.total) || 0,
         totalPages: Number(data?.pagination?.totalPages) || 0,
       },

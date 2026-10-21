@@ -20,11 +20,13 @@ import { formatPeso, formatShortDateManila, formatTimeManila } from "@/component
 import EmptyState from "@/components/common/EmptyState";
 import NoticeBox from "@/components/common/NoticeBox";
 import StatusChip from "@/components/common/StatusChip";
+import TablePagination, { TABLE_PAGE_SIZE } from "@/components/common/TablePagination";
 import { useAuth } from "@/context/AuthContext";
 import { RECORD_TYPE_LABELS, isRecordType } from "@/constants/violations";
 import { getApiErrorMessage } from "@/lib/axios";
 import {
   citationService,
+  type CitationPagination,
   type CitationRecord,
 } from "@/services/citation.service";
 import {
@@ -33,9 +35,6 @@ import {
   type DashboardTrendPoint,
   type RecentActivityItem,
 } from "@/services/dashboard.service";
-
-/** How many rows of the citation register the table shows. */
-const RECENT_CITATIONS = 8;
 
 /** Fixed pixel height of the bar plot, so the bars can size themselves in %. */
 const PLOT_HEIGHT = 132;
@@ -84,6 +83,14 @@ export default function AdminDashboardPage() {
   const [trend, setTrend] = useState<DashboardTrendPoint[]>([]);
   const [activity, setActivity] = useState<RecentActivityItem[]>([]);
   const [citations, setCitations] = useState<CitationRecord[]>([]);
+  const [citationPage, setCitationPage] = useState(1);
+  const [citationPagination, setCitationPagination] = useState<CitationPagination>({
+    page: 1,
+    limit: TABLE_PAGE_SIZE,
+    total: 0,
+    totalPages: 0,
+  });
+  const [isCitationsLoading, setIsCitationsLoading] = useState(true);
   const [summaryError, setSummaryError] = useState("");
   const [citationsError, setCitationsError] = useState(false);
 
@@ -93,17 +100,14 @@ export default function AdminDashboardPage() {
     const load = async () => {
       setIsLoading(true);
       setSummaryError("");
-      setCitationsError(false);
 
-      // Summary is the one call the page cannot do without; the trend, the
-      // activity feed and the table are each allowed to come back empty.
-      const [summaryResult, trendResult, activityResult, citationsResult] =
-        await Promise.allSettled([
-          dashboardService.getSummary(),
-          dashboardService.getTrend(),
-          dashboardService.getRecentActivity(),
-          citationService.listAllCitations({ page: 1, limit: RECENT_CITATIONS }),
-        ]);
+      // Summary is the one call the page cannot do without; the trend and the
+      // activity feed are each allowed to come back empty.
+      const [summaryResult, trendResult, activityResult] = await Promise.allSettled([
+        dashboardService.getSummary(),
+        dashboardService.getTrend(),
+        dashboardService.getRecentActivity(),
+      ]);
 
       if (cancelled) return;
 
@@ -118,8 +122,6 @@ export default function AdminDashboardPage() {
 
       setTrend(trendResult.status === "fulfilled" ? trendResult.value : []);
       setActivity(activityResult.status === "fulfilled" ? activityResult.value : []);
-      setCitations(citationsResult.status === "fulfilled" ? citationsResult.value : []);
-      setCitationsError(citationsResult.status === "rejected");
       setIsLoading(false);
     };
 
@@ -131,6 +133,47 @@ export default function AdminDashboardPage() {
       window.clearTimeout(timer);
     };
   }, [attempt]);
+
+  /**
+   * The register pages server-side, so it loads on its own: changing page (or
+   * refreshing) reloads this table without touching the panels above.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCitations = async () => {
+      setIsCitationsLoading(true);
+      setCitationsError(false);
+
+      try {
+        const result = await citationService.listCitationsPage({
+          page: citationPage,
+          limit: TABLE_PAGE_SIZE,
+        });
+        if (cancelled) return;
+
+        setCitations(result.citations);
+        setCitationPagination(result.pagination);
+
+        // The register can shrink between loads; step back to the last real
+        // page instead of stranding the table on an empty one.
+        if (result.pagination.totalPages > 0 && citationPage > result.pagination.totalPages) {
+          setCitationPage(result.pagination.totalPages);
+        }
+      } catch {
+        if (cancelled) return;
+        setCitationsError(true);
+      } finally {
+        if (!cancelled) setIsCitationsLoading(false);
+      }
+    };
+
+    const timer = window.setTimeout(loadCitations, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [attempt, citationPage]);
 
   const firstName = user?.firstName?.trim();
 
@@ -252,13 +295,24 @@ export default function AdminDashboardPage() {
 
       {/* The register */}
       <Panel
-        title="Recent citations"
-        hint={`Newest ${RECENT_CITATIONS} on record`}
+        title="Citation register"
+        hint={`${TABLE_PAGE_SIZE} per page`}
         Icon={ScrollText}
         className="mt-5"
         delay={220}
       >
-        <CitationsTable rows={citations} failed={citationsError} />
+        <CitationsTable rows={citations} failed={citationsError} loading={isCitationsLoading} />
+
+        {!citationsError && citations.length > 0 ? (
+          <TablePagination
+            page={citationPage}
+            totalPages={citationPagination.totalPages}
+            total={citationPagination.total}
+            onPageChange={setCitationPage}
+            disabled={isCitationsLoading}
+            itemLabel="citations"
+          />
+        ) : null}
       </Panel>
     </div>
   );
@@ -434,13 +488,38 @@ function ActivityFeed({ items }: { items: RecentActivityItem[] }) {
   );
 }
 
-function CitationsTable({ rows, failed }: { rows: CitationRecord[]; failed: boolean }) {
+function CitationsTable({
+  rows,
+  failed,
+  loading,
+}: {
+  rows: CitationRecord[];
+  failed: boolean;
+  loading: boolean;
+}) {
   if (failed) {
     return (
       <NoticeBox tone="danger" className="m-5 text-[13px]">
         The citation register could not be read. Check that the backend is running, then
         refresh.
       </NoticeBox>
+    );
+  }
+
+  // First load only: without this the empty state would flash before the rows
+  // arrive. Later pages keep the current rows on screen while they load.
+  if (loading && rows.length === 0) {
+    return (
+      <div className="space-y-3 px-5 py-4" aria-busy="true">
+        <span className="sr-only">Loading citations</span>
+        {[0, 1, 2, 3, 4, 5, 6, 7].map((index) => (
+          <div
+            key={index}
+            className="breathe h-4 rounded-full bg-console-canvas"
+            style={{ animationDelay: `${index * 60}ms` }}
+          />
+        ))}
+      </div>
     );
   }
 
@@ -453,11 +532,9 @@ function CitationsTable({ rows, failed }: { rows: CitationRecord[]; failed: bool
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" aria-busy={loading}>
       <table className="w-full min-w-[44rem] border-collapse text-left">
-        <caption className="sr-only">
-          The most recent citations on record, newest first
-        </caption>
+        <caption className="sr-only">Citations on record, newest first</caption>
 
         <thead>
           <tr className="border-b border-console-line bg-console-canvas/70 text-[10.5px] tracking-[0.14em] text-console-muted uppercase">

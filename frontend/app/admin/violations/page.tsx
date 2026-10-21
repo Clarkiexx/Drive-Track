@@ -28,8 +28,8 @@ import {
   type CitationRecord,
 } from "@/services/citation.service";
 
-/** Rows per register page — matches the backend default page size. */
-const PAGE_LIMIT = 10;
+/** Every console table pages eight rows at a time. */
+const PAGE_LIMIT = 8;
 
 type TabKey = "all" | "pending" | "settled" | "protest" | "cancelled" | "warning";
 

@@ -24,7 +24,7 @@
 | POST | `/api/v1/auth/driver/register` | Public | — | multipart field `licensePhoto` (optional) |
 | POST | `/api/v1/auth/driver/login` | Public | — | `fullName` + `password` |
 | POST | `/api/v1/auth/driver/change-password` | Bearer | driver | Only route reachable while `mustChangePassword` is true |
-| POST | `/api/v1/auth/driver/forgot-password` | Public | — | `fullName` + `licenseNumber` |
+| POST | `/api/v1/auth/driver/forgot-password` | Public | — | `fullName` + `licenseNumber`; 404 when the pair does not match |
 | POST | `/api/v1/auth/enforcer/login` | Public | — | `username` + `password` |
 | POST | `/api/v1/auth/admin/login` | Public | — | `username` + `password` |
 

@@ -152,8 +152,10 @@ async function driverRegister(req, res, next) {
  * number and forces a change on next login — reusing the exact same
  * trusted mechanism as onboarding rather than building a separate
  * email/SMS reset pipeline, which is out of scope for this capstone.
- * Always returns a generic success message regardless of match, so this
- * endpoint can't be used to check which license numbers are registered.
+ *
+ * The name/license pair must match. A mismatch answers 404 so the form can
+ * show a real fallback instead of a success message; this deliberately
+ * trades a small account-enumeration signal for clear UX.
  */
 async function driverForgotPassword(req, res, next) {
   try {
@@ -169,18 +171,24 @@ async function driverForgotPassword(req, res, next) {
       },
     });
 
-    if (driver) {
-      const passwordHash = await bcrypt.hash(driver.licenseNumber, SALT_ROUNDS);
-      await prisma.driver.update({
-        where: { driverId: driver.driverId },
-        data: { passwordHash, mustChangePassword: true },
-      });
+    if (!driver) {
+      return fail(
+        res,
+        'No account matches that full name and license number. Please check both and try again.',
+        404
+      );
     }
+
+    const passwordHash = await bcrypt.hash(driver.licenseNumber, SALT_ROUNDS);
+    await prisma.driver.update({
+      where: { driverId: driver.driverId },
+      data: { passwordHash, mustChangePassword: true },
+    });
 
     return success(
       res,
       null,
-      'If those details match an account, the password has been reset to the license number. Please log in and set a new password.'
+      'Password reset to your license number. Please log in and set a new password.'
     );
   } catch (err) {
     return respondWithMappedError(res, next, err);

@@ -192,7 +192,7 @@ async function createCitation(req, res, next) {
     const violationSummary = violationTypes.map((vt) => vt.description).join(', ');
 
     // Retry on citation-number collisions (two enforcers submitting at the
-    // same second can generate the same count-based number). The retry lives
+    // same instant can both read the same highest suffix). The retry lives
     // OUTSIDE the transaction on purpose: on Postgres a P2002 aborts the whole
     // open transaction, so the number must be regenerated and a *fresh*
     // transaction started. MySQL tolerated regenerating it inside the same

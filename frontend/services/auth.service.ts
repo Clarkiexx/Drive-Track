@@ -262,9 +262,9 @@ export const authService = {
   },
 
   /**
-   * POST /auth/driver/forgot-password — always answers 200 with a generic
-   * message (no account enumeration), so the caller should show the message
-   * as-is instead of assuming the details matched.
+   * POST /auth/driver/forgot-password — resets the password only when the
+   * full name and license number match an account. A mismatch rejects with
+   * the backend's 404 message, so callers should surface the error.
    */
   forgotPassword: async (input: ForgotPasswordInput): Promise<{ message: string }> => {
     const body = forgotPasswordSchema.parse(input);

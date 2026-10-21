@@ -31,17 +31,21 @@ export default function ForgotPasswordPage() {
 
     setIsSubmitting(true);
     try {
-      // The endpoint answers 200 whether or not the details matched. The
-      // message is shown exactly as returned, so this screen never confirms
-      // whether an account exists.
+      // The endpoint only resets when the name/license pair matches; a
+      // mismatch returns an error that is shown inline and as a toast.
       const result = await authService.forgotPassword({
         fullName: fullName.trim(),
         licenseNumber: licenseNumber.trim(),
       });
       setMessage(result.message);
-      toast.success("Request submitted.");
+      toast.success("Password reset.");
     } catch (error) {
-      toast.error(getApiErrorMessage(error, "Something went wrong. Please try again."));
+      const errorMessage = getApiErrorMessage(
+        error,
+        "No account matches that full name and license number. Please check both and try again."
+      );
+      setFieldError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setIsSubmitting(false);
     }

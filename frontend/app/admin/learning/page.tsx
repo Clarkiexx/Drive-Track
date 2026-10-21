@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { BookOpenText, GraduationCap, Plus, RotateCw } from "lucide-react";
+import { BookOpenText, GraduationCap, Lightbulb, Plus, RotateCw } from "lucide-react";
 
 import EmptyState from "@/components/common/EmptyState";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
 import SignShape from "@/components/common/SignShape";
+import StatusFilterSelect, { type StatusFilterOption } from "@/components/common/StatusFilterSelect";
 import { getApiErrorMessage } from "@/lib/axios";
 import {
   SIGN_CATEGORIES,
@@ -18,12 +19,21 @@ import {
 } from "@/data/trafficSigns";
 import {
   learningService,
+  type LearningEducationalRecord,
   type LearningQuizRecord,
   type LearningSignCreateInput,
   type LearningSignRecord,
 } from "@/services/learning.service";
 
-type Tab = "signs" | "quiz";
+type Tab = "signs" | "quiz" | "educational";
+
+type StatusFilter = "all" | "active" | "archived";
+
+const STATUS_FILTER_OPTIONS: readonly StatusFilterOption<StatusFilter>[] = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "archived", label: "Archived" },
+];
 
 /** "inverted-triangle" → "Inverted triangle" — technical tokens, prettified. */
 function prettyToken(value: string): string {
@@ -37,7 +47,7 @@ export default function AdminLearningPage() {
   const [tab, setTab] = useState<Tab>("signs");
   const [signs, setSigns] = useState<LearningSignRecord[]>([]);
   const [quiz, setQuiz] = useState<LearningQuizRecord[]>([]);
-  const [showArchived, setShowArchived] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -47,20 +57,28 @@ export default function AdminLearningPage() {
   const [editingSign, setEditingSign] = useState<LearningSignRecord | null>(null);
   const [showCreateQuiz, setShowCreateQuiz] = useState(false);
   const [editingQuiz, setEditingQuiz] = useState<LearningQuizRecord | null>(null);
+  const [educational, setEducational] = useState<LearningEducationalRecord[]>([]);
+  const [showCreateEducational, setShowCreateEducational] = useState(false);
+  const [editingEducational, setEditingEducational] = useState<LearningEducationalRecord | null>(
+    null
+  );
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setLoadError("");
     try {
-      const [signRows, quizRows] = await Promise.all([
+      const [signRows, quizRows, educationalRows] = await Promise.all([
         learningService.listSigns(),
         learningService.listQuiz(),
+        learningService.listEducational(),
       ]);
       setSigns(signRows);
       setQuiz(quizRows);
+      setEducational(educationalRows);
     } catch (err) {
       setSigns([]);
       setQuiz([]);
+      setEducational([]);
       setLoadError(getApiErrorMessage(err, "Unable to load the Learning Center content."));
     } finally {
       setIsLoading(false);
@@ -108,10 +126,34 @@ export default function AdminLearningPage() {
     }
   }
 
-  const visibleSigns = showArchived ? signs : signs.filter((row) => row.isActive);
-  const visibleQuiz = showArchived ? quiz : quiz.filter((row) => row.isActive);
+  async function handleToggleEducationalStatus(row: LearningEducationalRecord) {
+    if (actingId !== null) return;
+    setActingId(row.id);
+    setActionError("");
+    setActionNotice("");
+    try {
+      await learningService.updateEducationalStatus(row.id, !row.isActive);
+      const snippet = `${row.question.slice(0, 48)}${row.question.length > 48 ? "…" : ""}`;
+      setActionNotice(`Question “${snippet}” is now ${row.isActive ? "archived" : "active"}.`);
+      await load();
+    } catch (err) {
+      setActionError(getApiErrorMessage(err, "Unable to update educational question status."));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  // One filter drives every tab, exactly like the old "Show archived" toggle:
+  // All keeps everything visible, Active hides retired entries, Archived shows
+  // only them.
+  const matchesStatusFilter = (isActive: boolean) =>
+    statusFilter === "all" ? true : statusFilter === "active" ? isActive : !isActive;
+  const visibleSigns = signs.filter((row) => matchesStatusFilter(row.isActive));
+  const visibleQuiz = quiz.filter((row) => matchesStatusFilter(row.isActive));
+  const visibleEducational = educational.filter((row) => matchesStatusFilter(row.isActive));
   const activeSignCount = signs.filter((row) => row.isActive).length;
   const activeQuizCount = quiz.filter((row) => row.isActive).length;
+  const activeEducationalCount = educational.filter((row) => row.isActive).length;
 
   return (
     <div>
@@ -121,19 +163,25 @@ export default function AdminLearningPage() {
             Learning Center
           </p>
           <h2 className="font-display mt-1.5 text-[22px] leading-tight font-semibold tracking-tight text-ink">
-            Sign catalogue & quiz
+            Sign catalogue, quiz & practice
           </h2>
           <p className="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-console-muted">
-            Maintain the road signs and quiz questions drivers study in the app.
-            Archived entries disappear from the driver Learning Center and Quiz —
-            nothing is ever deleted.
+            Maintain the road signs, quiz questions and educational practice questions
+            drivers study in the app. Archived entries disappear from the driver
+            Learning Center, the Quiz and the Educational Quiz — nothing is ever deleted.
           </p>
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => (tab === "signs" ? setShowCreateSign(true) : setShowCreateQuiz(true))}
+            onClick={() =>
+              tab === "signs"
+                ? setShowCreateSign(true)
+                : tab === "quiz"
+                  ? setShowCreateQuiz(true)
+                  : setShowCreateEducational(true)
+            }
             className="inline-flex items-center gap-2 rounded-xl bg-console-rail px-3.5 py-2 text-[12.5px] font-semibold text-white transition-colors hover:bg-console-rail-deep"
           >
             <Plus size={14} strokeWidth={2.3} aria-hidden />
@@ -201,6 +249,26 @@ export default function AdminLearningPage() {
             {quiz.length}
           </span>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "educational"}
+          onClick={() => setTab("educational")}
+          className={`rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold transition-colors ${
+            tab === "educational"
+              ? "bg-console-rail text-white"
+              : "text-console-muted hover:bg-brand-soft hover:text-ink"
+          }`}
+        >
+          Educational
+          <span
+            className={`tabular-nums ml-1.5 text-[11px] ${
+              tab === "educational" ? "text-white/70" : "text-console-muted"
+            }`}
+          >
+            {educational.length}
+          </span>
+        </button>
       </div>
 
       {actionError ? (
@@ -227,15 +295,11 @@ export default function AdminLearningPage() {
             <p className="ml-auto shrink-0 text-[11.5px] leading-none text-console-muted">
               {activeSignCount} active of {signs.length}
             </p>
-            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[12px] font-semibold text-console-muted">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(event) => setShowArchived(event.target.checked)}
-                className="size-3.5 accent-brand-600"
-              />
-              Show archived
-            </label>
+            <StatusFilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+            />
           </header>
 
           {isLoading ? (
@@ -255,10 +319,20 @@ export default function AdminLearningPage() {
               </NoticeBox>
             </div>
           ) : visibleSigns.length === 0 ? (
-            <EmptyState title="No learning signs found">
-              {showArchived
+            <EmptyState
+              title={
+                statusFilter === "all"
+                  ? "No learning signs found"
+                  : statusFilter === "active"
+                    ? "No active signs"
+                    : "No archived signs"
+              }
+            >
+              {statusFilter === "all"
                 ? "The catalogue is empty — add the first sign to get started."
-                : "No active signs. Toggle “Show archived” to review retired entries."}
+                : statusFilter === "active"
+                  ? "Nothing is active right now — switch the filter to review retired entries."
+                  : "Nothing has been retired — every sign is currently live."}
             </EmptyState>
           ) : (
             <div className="overflow-x-auto">
@@ -353,7 +427,7 @@ export default function AdminLearningPage() {
             </div>
           )}
         </section>
-      ) : (
+      ) : tab === "quiz" ? (
         <section
           className="rise overflow-hidden rounded-2xl border border-console-line bg-surface shadow-console"
           aria-live="polite"
@@ -366,15 +440,11 @@ export default function AdminLearningPage() {
             <p className="ml-auto shrink-0 text-[11.5px] leading-none text-console-muted">
               {activeQuizCount} active of {quiz.length}
             </p>
-            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[12px] font-semibold text-console-muted">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(event) => setShowArchived(event.target.checked)}
-                className="size-3.5 accent-brand-600"
-              />
-              Show archived
-            </label>
+            <StatusFilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+            />
           </header>
 
           {isLoading ? (
@@ -394,10 +464,20 @@ export default function AdminLearningPage() {
               </NoticeBox>
             </div>
           ) : visibleQuiz.length === 0 ? (
-            <EmptyState title="No quiz questions yet">
-              {showArchived
+            <EmptyState
+              title={
+                statusFilter === "all"
+                  ? "No quiz questions yet"
+                  : statusFilter === "active"
+                    ? "No active questions"
+                    : "No archived questions"
+              }
+            >
+              {statusFilter === "all"
                 ? "Add the first question — each one shows a sign and four answers."
-                : "No active questions. Toggle “Show archived” to review retired entries."}
+                : statusFilter === "active"
+                  ? "Nothing is active right now — switch the filter to review retired entries."
+                  : "Nothing has been retired — every question is currently live."}
             </EmptyState>
           ) : (
             <div className="overflow-x-auto">
@@ -474,6 +554,145 @@ export default function AdminLearningPage() {
             </div>
           )}
         </section>
+      ) : (
+        <section
+          className="rise overflow-hidden rounded-2xl border border-console-line bg-surface shadow-console"
+          aria-live="polite"
+        >
+          <header className="flex flex-wrap items-center gap-2.5 border-b border-console-line px-5 py-3.5">
+            <Lightbulb size={16} strokeWidth={2.1} className="shrink-0 text-brand-600" aria-hidden />
+            <h3 className="font-display text-[15px] leading-none font-semibold tracking-tight text-ink">
+              Educational questions
+            </h3>
+            <p className="ml-auto shrink-0 text-[11.5px] leading-none text-console-muted">
+              {activeEducationalCount} active of {educational.length}
+            </p>
+            <StatusFilterSelect
+              value={statusFilter}
+              onChange={setStatusFilter}
+              options={STATUS_FILTER_OPTIONS}
+            />
+          </header>
+
+          {isLoading ? (
+            <ul aria-hidden className="divide-y divide-console-line/70">
+              {[0, 1, 2, 3].map((index) => (
+                <li key={index} className="flex items-center gap-3 px-5 py-4">
+                  <div className="breathe h-3 w-56 rounded-full bg-console-canvas" />
+                  <div className="breathe h-3 w-32 rounded-full bg-console-canvas [animation-delay:120ms]" />
+                  <div className="breathe ml-auto h-5 w-20 rounded-full bg-console-canvas [animation-delay:200ms]" />
+                </li>
+              ))}
+            </ul>
+          ) : loadError ? (
+            <div className="p-5">
+              <NoticeBox tone="danger" className="text-[13px]">
+                {loadError}
+              </NoticeBox>
+            </div>
+          ) : visibleEducational.length === 0 ? (
+            <EmptyState
+              title={
+                statusFilter === "all"
+                  ? "No educational questions yet"
+                  : statusFilter === "active"
+                    ? "No active questions"
+                    : "No archived questions"
+              }
+            >
+              {statusFilter === "all"
+                ? "Add the first practice question — 3 or 4 answers, no sign needed."
+                : statusFilter === "active"
+                  ? "Nothing is active right now — switch the filter to review retired entries."
+                  : "Nothing has been retired — every question is currently live."}
+            </EmptyState>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[46rem] border-collapse text-left">
+                <caption className="sr-only">
+                  Educational practice questions in the Learning Center
+                </caption>
+                <thead>
+                  <tr className="border-b border-console-line bg-console-canvas/70 text-[10.5px] tracking-[0.14em] text-console-muted uppercase">
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Question
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Correct answer
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 text-right font-bold">
+                      Order
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Status
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleEducational.map((row) => (
+                    <tr
+                      key={row.id}
+                      className="border-b border-console-line/70 transition-colors last:border-0 hover:bg-brand-50/70"
+                    >
+                      <td className="px-5 py-3.5 align-top">
+                        <p
+                          className="max-w-[22rem] truncate text-[13px] font-bold text-ink"
+                          title={row.question}
+                        >
+                          {row.question}
+                        </p>
+                        <p className="mt-0.5 text-[12px] text-console-muted">
+                          {row.options.length} answers · no sign
+                        </p>
+                      </td>
+                      <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
+                        <p
+                          className="max-w-[12rem] truncate"
+                          title={row.options[row.correctIndex] ?? undefined}
+                        >
+                          {(row.options[row.correctIndex] ?? "—") as string}
+                        </p>
+                      </td>
+                      <td className="tabular-nums px-5 py-3.5 text-right align-top text-[13px] text-ink/80">
+                        {row.sortOrder}
+                      </td>
+                      <td className="px-5 py-3.5 align-top">
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleEducationalStatus(row)}
+                          disabled={actingId !== null}
+                          title={
+                            row.isActive
+                              ? "Archive — hides from the driver Educational Quiz"
+                              : "Restore — shows in the driver Educational Quiz"
+                          }
+                          aria-pressed={row.isActive}
+                          className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] text-[11px] leading-tight font-bold transition-opacity disabled:opacity-60 ${
+                            row.isActive ? "bg-go-soft text-go-ink" : "bg-chip-neutral text-muted"
+                          }`}
+                        >
+                          {row.isActive ? "Active" : "Archived"}
+                        </button>
+                      </td>
+                      <td className="px-5 py-3.5 align-top">
+                        <button
+                          type="button"
+                          onClick={() => setEditingEducational(row)}
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-console-line bg-surface px-3 py-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:border-brand-300 hover:bg-brand-soft"
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
 
       {showCreateSign ? (
@@ -534,6 +753,37 @@ export default function AdminLearningPage() {
             await learningService.updateQuizQuestion(editingQuiz.id, input);
             setEditingQuiz(null);
             setActionNotice("Quiz question updated.");
+            setActionError("");
+            await load();
+          }}
+        />
+      ) : null}
+
+      {showCreateEducational ? (
+        <EducationalFormDialog
+          title="Add educational question"
+          submitLabel="Create Question"
+          onClose={() => setShowCreateEducational(false)}
+          onSubmit={async (input) => {
+            await learningService.createEducational(input);
+            setShowCreateEducational(false);
+            setActionNotice("Educational question added — live in the driver study section.");
+            setActionError("");
+            await load();
+          }}
+        />
+      ) : null}
+
+      {editingEducational ? (
+        <EducationalFormDialog
+          title="Edit educational question"
+          submitLabel="Save Changes"
+          initial={editingEducational}
+          onClose={() => setEditingEducational(null)}
+          onSubmit={async (input) => {
+            await learningService.updateEducational(editingEducational.id, input);
+            setEditingEducational(null);
+            setActionNotice("Educational question updated.");
             setActionError("");
             await load();
           }}
@@ -962,6 +1212,175 @@ function QuizFormDialog({
                 </option>
               ))}
             </select>
+          </div>
+
+          {error ? (
+            <NoticeBox tone="danger" className="text-[13px]">
+              {error}
+            </NoticeBox>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-console-line bg-surface px-3.5 py-2 text-[12.5px] font-semibold text-ink hover:bg-brand-soft"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="rounded-lg bg-console-rail px-3.5 py-2 text-[12.5px] font-semibold text-white hover:bg-console-rail-deep disabled:opacity-60"
+            >
+              {isSubmitting ? "Saving…" : submitLabel}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EducationalFormDialog({
+  title,
+  submitLabel,
+  initial,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  submitLabel: string;
+  initial?: LearningEducationalRecord | null;
+  onClose: () => void;
+  onSubmit: (input: {
+    question: string;
+    options: string[];
+    correctIndex: number;
+    sortOrder?: number;
+  }) => Promise<void>;
+}) {
+  const [question, setQuestion] = useState(initial?.question ?? "");
+  // Always four inputs; the 4th is optional so one form covers 3- and 4-option
+  // questions (the API accepts 3 or 4).
+  const [options, setOptions] = useState<string[]>(
+    initial
+      ? [
+          initial.options[0] ?? "",
+          initial.options[1] ?? "",
+          initial.options[2] ?? "",
+          initial.options[3] ?? "",
+        ]
+      : ["", "", "", ""]
+  );
+  const [correctIndex, setCorrectIndex] = useState(initial?.correctIndex ?? 0);
+  const [sortOrder, setSortOrder] = useState(initial ? String(initial.sortOrder) : "");
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  function setOption(index: number, value: string) {
+    setOptions((current) => current.map((option, i) => (i === index ? value : option)));
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (!question.trim()) {
+      setError("Question is required.");
+      return;
+    }
+    if (options.slice(0, 3).some((option) => !option.trim())) {
+      setError("Options 1-3 are required — add option 4 only if the question needs it.");
+      return;
+    }
+    const filled = options.slice(0, 3).map((option) => option.trim());
+    if (options[3]?.trim()) filled.push(options[3].trim());
+    if (correctIndex >= filled.length) {
+      setError("The correct answer points at an empty option — pick a filled one.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await onSubmit({
+        question: question.trim(),
+        options: filled,
+        correctIndex,
+        ...(sortOrder.trim() ? { sortOrder: Number(sortOrder) } : {}),
+      });
+    } catch (err) {
+      setError(getApiErrorMessage(err, "Unable to save educational question."));
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/45 p-4 backdrop-blur-[2px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl border border-console-line bg-surface p-5 shadow-float"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h4 className="font-display text-[15px] font-semibold tracking-tight text-ink">{title}</h4>
+        <form onSubmit={handleSubmit} className="mt-3 space-y-3">
+          <FormField
+            label="Question"
+            required
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="e.g. What does a steady red traffic light mean?"
+          />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            {options.map((option, index) => (
+              <FormField
+                key={index}
+                label={index === 3 ? "Option 4 (optional)" : `Option ${index + 1}`}
+                required={index < 3}
+                value={option}
+                onChange={(event) => setOption(index, event.target.value)}
+                placeholder={index === 0 ? "e.g. Stop" : ""}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="le-correct"
+                className="mb-1.5 block text-[13px] font-semibold text-ink"
+              >
+                Correct answer
+              </label>
+              <select
+                id="le-correct"
+                value={String(correctIndex)}
+                onChange={(event) => setCorrectIndex(Number(event.target.value))}
+                className="dt-input"
+              >
+                {options.map((option, index) => (
+                  <option key={index} value={index} disabled={!option.trim()}>
+                    Option {index + 1}
+                    {option.trim() ? ` — ${option.trim()}` : " (empty)"}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="w-28 shrink-0">
+              <FormField
+                label="Order"
+                type="number"
+                min="0"
+                max="9999"
+                step="1"
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value)}
+                placeholder="auto"
+              />
+            </div>
           </div>
 
           {error ? (

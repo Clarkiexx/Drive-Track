@@ -6,6 +6,7 @@ import { RotateCw } from "lucide-react";
 import AppBar from "@/components/common/AppBar";
 import NoticeBox from "@/components/common/NoticeBox";
 import PageBody from "@/components/common/PageBody";
+import CitationMap from "@/components/common/CitationMap";
 import {
   EvidenceStrip,
   FineBox,
@@ -394,6 +395,13 @@ function Receipt({ citation, isPaying, payError, canResume, awaitingConfirmation
 
       <InfoRow label="Date & Time" value={formatDateTimeManila(citation.occurredAt)} />
       <InfoRow label="Location" value={citation.placeOfViolation} />
+      <CitationMap
+        latitude={citation.latitude}
+        longitude={citation.longitude}
+        place={citation.placeOfViolation}
+        height={220}
+        className="mt-2.5"
+      />
       {citation.plateNumber ? (
         <InfoRow label="Plate Number" value={citation.plateNumber} />
       ) : null}

@@ -68,6 +68,11 @@ function errorHandler(err, req, res, next) {
   // message instead. Known fail() responses already carry safe messages.
   const statusCode = err.statusCode || err.status || 500;
   if (statusCode >= 500) {
+    // Errors that explicitly opt into a safe client-facing message (e.g. the
+    // Cloudinary storage helpers' 502s) keep it; everything else stays opaque.
+    if (err.publicMessage) {
+      return fail(res, err.publicMessage, statusCode);
+    }
     return fail(res, 'Internal server error', 500);
   }
   return fail(res, 'Request failed', statusCode);

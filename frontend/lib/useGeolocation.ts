@@ -25,9 +25,10 @@ type UseGeolocation = {
  * `latitude`/`longitude` as floats). So "no fix" is a blocked submission, not a
  * degraded one, and the failure has to explain itself.
  *
- * WHY not a map library: the citation needs a coordinate pair, not a picture of
- * a street. `navigator.geolocation` is the whole API — no dependency, no
- * network round-trip for tiles an officer would never look at on this screen.
+ * WHY no map library here: this hook only owns the fix. Map rendering and
+ * reverse geocoding are separate presentation concerns (CitationMap +
+ * geocodeService), so capture itself keeps working even when tiles or the
+ * geocoder are unreachable.
  */
 
 /**

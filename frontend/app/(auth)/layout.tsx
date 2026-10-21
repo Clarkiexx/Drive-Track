@@ -5,33 +5,36 @@ import { usePathname } from "next/navigation";
 import { BadgeCheck } from "lucide-react";
 
 import BrandMark from "@/components/common/BrandMark";
-import type { Role } from "@/constants/roles";
 
-type AuthPortalValue = {
-  role: Role;
-  setRole: (role: Role) => void;
+/** Which desk the sign-in card is dressed for. */
+export type AuthDesk = "plain" | "console";
+
+type AuthDeskValue = {
+  desk: AuthDesk;
+  setDesk: (desk: AuthDesk) => void;
 };
 
-const AuthPortalContext = createContext<AuthPortalValue | null>(null);
+const AuthDeskContext = createContext<AuthDeskValue | null>(null);
 
 /**
- * The account type the sign-in card is currently showing.
+ * The desk the sign-in card is currently showing.
  *
  * It lives here rather than in LoginForm because the *frame* is the thing that
- * has to answer "office console or phone product?", and a child cannot hand
- * state up to its layout. Only /login writes to it — register, forgot-password
- * and change-password are driver flows and never read it, so they keep the
- * plain frame.
+ * has to answer "office console or plain?", and a child cannot hand state up
+ * to its layout. Only /login writes to it — from its ?next= target, so a
+ * visitor bounced from the admin area signs into the console it was headed
+ * for. register, forgot-password and change-password never read it, so they
+ * keep the plain frame.
  */
-export function useAuthPortal(): AuthPortalValue {
-  const portal = useContext(AuthPortalContext);
+export function useAuthDesk(): AuthDeskValue {
+  const desk = useContext(AuthDeskContext);
 
   // Every screen in this route group renders inside the provider below, so a
   // miss means the hook was used somewhere it cannot work. Better that than a
   // silent default quietly dressing the wrong screen.
-  if (!portal) throw new Error("useAuthPortal must be read inside the (auth) layout.");
+  if (!desk) throw new Error("useAuthDesk must be read inside the (auth) layout.");
 
-  return portal;
+  return desk;
 }
 
 /**
@@ -100,26 +103,26 @@ function ConsoleRail({ visible }: { visible: boolean }) {
  * Two compositions from one DOM. Below lg it is exactly what it has always
  * been: the tall brand hero with sweep rings and a road seam, the card pulled up
  * 32px to overlap it, in a 390px column. At lg it becomes a desk composition —
- * and which desk depends on the portal picked on the card, because an
- * administrator signing in through a phone column is the mismatch this fixes.
+ * and which desk depends on where the visitor was headed: someone bounced here
+ * from the admin area (?next=/admin/…) gets the console frame, everyone else
+ * the plain one.
  *
- * The desktop layer is `position: fixed` on purpose: AppShell wraps every
- * non-admin route in a `max-w-md` column at every width, so this is the only
- * way the sign-in screen can fill a laptop. No ancestor between here and the
- * root is transformed, so it resolves against the viewport.
+ * The desk layers are absolutely positioned inside the inner box and the page
+ * scrolls normally; AppShell drops the phone frame for these routes at lg and
+ * above (see isAuthPath), which is what lets the box actually be full width.
  */
 export default function AuthLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const [role, setRole] = useState<Role>("driver");
+  const [desk, setDesk] = useState<AuthDesk>("plain");
 
-  // Only /login has a portal switcher. Gating on the path means walking on to
-  // /register — or any sibling — drops back to the plain frame instead of
-  // inheriting the console, since this layout's state survives navigation
-  // inside the route group.
-  const isConsole = pathname === "/login" && role === "admin";
+  // Only /login can ask for the console dress. Gating on the path means
+  // walking on to /register — or any sibling — drops back to the plain frame
+  // instead of inheriting the console, since this layout's state survives
+  // navigation inside the route group.
+  const isConsole = pathname === "/login" && desk === "console";
 
   return (
-    <AuthPortalContext.Provider value={{ role, setRole }}>
+    <AuthDeskContext.Provider value={{ desk, setDesk }}>
       <div className="relative flex min-h-dvh flex-col bg-canvas">
         {/* The inner box is the positioned frame for every desk layer, so they
             are painted over the full height even when the card is tall enough
@@ -236,6 +239,6 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </div>
-    </AuthPortalContext.Provider>
+    </AuthDeskContext.Provider>
   );
 }

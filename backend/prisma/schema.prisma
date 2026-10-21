@@ -369,6 +369,9 @@ model KnowledgeBase {
 //  - learning_quiz_questions: `options` is a 4-item text array;
 //    `correct_index` is 0-based into it; `sign_id` references
 //    learning_signs.id (FK declared in the runtime DDL).
+//  - learning_educational_questions: the "Educational" practice section —
+//    text-only questions (no sign); `options` is a 3- or 4-item text array,
+//    `correct_index` is 0-based into it.
 model LearningSign {
   id         String   @id
   name       String
@@ -398,4 +401,17 @@ model LearningQuizQuestion {
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("learning_quiz_questions")
+}
+
+model LearningEducationalQuestion {
+  id           String   @id
+  question     String
+  options      String[]
+  correctIndex Int      @map("correct_index")
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("learning_educational_questions")
 }

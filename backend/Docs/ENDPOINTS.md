@@ -20,6 +20,7 @@
 
 | Method | Path | Auth | Roles | Notes |
 | --- | --- | --- | --- | --- |
+| POST | `/api/v1/auth/login` | Public | — | Unified web login — `identifier` (driver full name **or** staff username) + `password`; response adds `role` + the matching per-role payload |
 | POST | `/api/v1/auth/driver/register` | Public | — | multipart field `licensePhoto` (optional) |
 | POST | `/api/v1/auth/driver/login` | Public | — | `fullName` + `password` |
 | POST | `/api/v1/auth/driver/change-password` | Bearer | driver | Only route reachable while `mustChangePassword` is true |
@@ -42,6 +43,12 @@
 | PATCH | `/api/v1/citations/:id/cancel` | Bearer + role | admin | |
 | PATCH | `/api/v1/citations/:id/protest` | Bearer + role | admin | |
 | GET | `/api/v1/citations/:id` | Bearer + role | driver, enforcer, admin | Catch-all `/:id` — must stay last |
+
+## Geocoding — `src/routes/geocodeRoutes.js`
+
+| Method | Path | Auth | Roles | Notes |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/geocode/reverse` | Bearer + role | enforcer, admin | `lat`/`lng` query; cached Nominatim/Photon reverse lookup returning `placeName`, `displayName`, `source`, `cached` |
 
 ## Drivers — `src/routes/driverRoutes.js` (router-level `authenticate`)
 
@@ -89,6 +96,10 @@
 | POST | `/api/v1/learning/quiz` | Bearer + role | admin | |
 | PATCH | `/api/v1/learning/quiz/:id` | Bearer + role | admin | Partial update — all fields optional |
 | PATCH | `/api/v1/learning/quiz/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) |
+| GET | `/api/v1/learning/educational` | Bearer | driver, enforcer, admin | The "Educational" study set (answers included); `?active=true` narrows to active rows |
+| POST | `/api/v1/learning/educational` | Bearer + role | admin | 3–4 answer options; `correctIndex` must point at a filled option (422 otherwise) |
+| PATCH | `/api/v1/learning/educational/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/educational/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) — nothing is hard-deleted |
 
 ## Notifications — `src/routes/notificationRoutes.js` (router-level `authenticate`)
 

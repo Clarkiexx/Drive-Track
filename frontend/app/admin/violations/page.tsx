@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import EmptyState from "@/components/common/EmptyState";
+import CitationMap from "@/components/common/CitationMap";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
 import StatusChip from "@/components/common/StatusChip";
@@ -667,6 +668,13 @@ function CitationDetailDialog({
                   <p className="mt-0.5 text-[12.5px] text-console-muted">
                     📍 {citation.placeOfViolation}
                   </p>
+                  <CitationMap
+                    latitude={citation.latitude}
+                    longitude={citation.longitude}
+                    place={citation.placeOfViolation}
+                    height={200}
+                    className="mt-3"
+                  />
                   {citation.driverUnderProtest ? (
                     <p className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-bold text-signal-stop">
                       <Flag size={12} strokeWidth={2.6} aria-hidden />

@@ -8,6 +8,7 @@ const { success, fail } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 // Prisma-backed as of the lane-C port (no Sequelize left on this require path).
 const { logAdminAction } = require('../services/auditLogService');
+const { uploadAvatarImage, deleteAsset, deleteAvatarByUrl } = require('../services/cloudinaryService');
 
 const SALT_ROUNDS = 10;
 
@@ -232,11 +233,14 @@ async function updateEnforcerMe(req, res, next) {
 
 /**
  * PATCH /enforcers/me/photo — the signed-in enforcer uploads or replaces
- * their profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB, stored
- * under /uploads/avatars/ and served publicly like evidence photos). The
- * previous avatar file is removed best-effort.
+ * their profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB). The avatar
+ * is stored as a public Cloudinary image in drivetrack/avatars and the secure
+ * URL goes into profilePhotoPath. The previous avatar is removed best-effort
+ * (Cloudinary asset, or a legacy local /uploads/avatars/ file).
  */
 async function updateEnforcerPhotoMe(req, res, next) {
+  let uploadedAvatar = null;
+  let persisted = false;
   try {
     if (!req.file) return fail(res, 'A photo file is required', 422);
 
@@ -246,21 +250,29 @@ async function updateEnforcerPhotoMe(req, res, next) {
       : null;
     if (!existing) return fail(res, 'Enforcer not found', 404);
 
-    const photoPath = `/uploads/avatars/${req.file.filename}`;
+    uploadedAvatar = await uploadAvatarImage(req.file.buffer);
     const previous = existing.profilePhotoPath;
-    if (previous && previous.startsWith('/uploads/avatars/')) {
-      const absolute = path.join(__dirname, '..', '..', previous);
-      fs.promises.unlink(absolute).catch(() => {});
-    }
 
     const enforcer = await prisma.enforcer.update({
       where: { enforcerId },
-      data: { profilePhotoPath: photoPath },
+      data: { profilePhotoPath: uploadedAvatar.secure_url },
     });
+    persisted = true;
+
+    if (previous && previous.startsWith('/uploads/avatars/')) {
+      // Legacy local avatar from before the Cloudinary move.
+      const absolute = path.join(__dirname, '..', '..', previous);
+      fs.promises.unlink(absolute).catch(() => {});
+    } else if (previous) {
+      deleteAvatarByUrl(previous);
+    }
 
     const { passwordHash: _omit, ...safeEnforcer } = enforcer;
     return success(res, safeEnforcer, 'Profile photo updated');
   } catch (err) {
+    if (uploadedAvatar && !persisted) {
+      await deleteAsset(uploadedAvatar.public_id);
+    }
     return respondWithMappedError(res, next, err);
   }
 }

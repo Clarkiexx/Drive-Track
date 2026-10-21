@@ -1,7 +1,8 @@
 /**
  * Learning repository — DDL for the admin-managed Learning Center
- * (`learning_signs` + `learning_quiz_questions` — see prisma/schema.prisma
- * LearningSign / LearningQuizQuestion).
+ * (`learning_signs` + `learning_quiz_questions` +
+ * `learning_educational_questions` — see prisma/schema.prisma LearningSign /
+ * LearningQuizQuestion / LearningEducationalQuestion).
  *
  * The tables are created here with `CREATE TABLE IF NOT EXISTS` (never via
  * `prisma db push` / `migrate`: the live Neon database has known unrelated
@@ -47,6 +48,20 @@ CREATE TABLE IF NOT EXISTS learning_quiz_questions (
   updated_at TIMESTAMPTZ(3) NOT NULL DEFAULT now()
 )`;
 
+// The "Educational" practice section: text-only questions with no sign, so
+// there is no FK here. `options` holds 3 or 4 answers.
+const CREATE_EDUCATIONAL_SQL = `
+CREATE TABLE IF NOT EXISTS learning_educational_questions (
+  id TEXT PRIMARY KEY,
+  question TEXT NOT NULL,
+  options TEXT[] NOT NULL,
+  correct_index INTEGER NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ(3) NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ(3) NOT NULL DEFAULT now()
+)`;
+
 /** Memoized guard — signs first (the quiz table references it). */
 let ensurePromise = null;
 
@@ -55,6 +70,7 @@ function ensureTables() {
     ensurePromise = (async () => {
       await prisma.$executeRawUnsafe(CREATE_SIGNS_SQL);
       await prisma.$executeRawUnsafe(CREATE_QUIZ_SQL);
+      await prisma.$executeRawUnsafe(CREATE_EDUCATIONAL_SQL);
     })().catch((err) => {
       // Don't cache a failure: a transient DB error must not poison every
       // later request. The next caller retries the guarded DDL.
@@ -69,4 +85,5 @@ module.exports = {
   ensureTables,
   CREATE_SIGNS_SQL,
   CREATE_QUIZ_SQL,
+  CREATE_EDUCATIONAL_SQL,
 };

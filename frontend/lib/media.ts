@@ -4,11 +4,13 @@ import { API_BASE_URL } from "@/lib/axios";
  * Media URL helpers — client-side mirror of driver-app/src/config.js
  * (`getMediaBaseUrl` / `getMediaUrl`).
  *
- * The backend stores upload paths RELATIVE to its own origin
- * (`/uploads/evidence/<file>`, `/uploads/licenses/<file>`), while
- * NEXT_PUBLIC_API_URL points at `http://host:5000/api/v1`. Rendering those
- * paths straight into an <img src> would resolve against the Next.js origin
- * and 404, so the `/api/v1` suffix is stripped to recover the backend origin:
+ * The backend stores legacy local media paths RELATIVE to its own origin
+ * (`/uploads/evidence/<file>`, `/uploads/avatars/<file>`,
+ * `/uploads/licenses/<file>`) and returns absolute Cloudinary URLs for new
+ * avatar uploads, while NEXT_PUBLIC_API_URL points at
+ * `http://host:5000/api/v1`. Rendering relative paths straight into an
+ * <img src> would resolve against the Next.js origin and 404, so the `/api/v1`
+ * suffix is stripped to recover the backend origin:
  *
  *   NEXT_PUBLIC_API_URL = http://192.168.1.19:5000/api/v1
  *   getMediaBaseUrl()    = http://192.168.1.19:5000
@@ -26,10 +28,12 @@ export function getMediaBaseUrl(): string {
  * Absolute http(s) URLs and empty/null values pass through untouched.
  *
  * AUTH NOTE — license photos answer 401 for non-admin roles:
- *   backend/src/app.js mounts `/uploads/licenses` behind
+ *   legacy photos live under the backend's `/uploads/licenses` mount and new
+ *   photos use the `/api/v1/media/license-photo` proxy; both sit behind
  *   `authenticate` + `allowRoles('admin')`, so a license photo URL only loads
  *   with an admin JWT. Drivers/enforcers get 401 (and self-registered drivers
- *   cannot see their own photo). Evidence photos under `/uploads/evidence` are
+ *   cannot see their own photo). Evidence photos under `/uploads/evidence` and
+ *   avatars (Cloudinary secure_urls or legacy `/uploads/avatars` paths) are
  *   public. This is a plain <img src> fetch, NOT an axios call, so the
  *   lib/axios.ts 401 interceptor does not fire — handle the broken image in
  *   the component (placeholder) instead of expecting a redirect.
@@ -43,7 +47,8 @@ export function getMediaUrl(imagePath?: string | null): string {
 
 /**
  * Fetches a protected backend file (driver license photos are served only to
- * authenticated admins — backend/src/app.js mounts `/uploads/licenses` behind
+ * authenticated admins — legacy photos via the backend's `/uploads/licenses`
+ * mount, new photos via the `/api/v1/media/license-photo` proxy, both behind
  * `authenticate` + `allowRoles('admin')`) and returns an object URL for use as
  * an <img> src. The JWT travels in the Authorization header, never in the URL.
  * Callers must revoke the URL (URL.revokeObjectURL) when done. Mirrors

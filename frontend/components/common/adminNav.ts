@@ -46,6 +46,13 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     ready: true,
   },
   {
+    slug: "notifications",
+    label: "Notifications",
+    Icon: Bell,
+    blurb: "Broadcast advisories to drivers and enforcers.",
+    ready: true,
+  },
+  {
     slug: "drivers",
     label: "Drivers",
     Icon: Users,
@@ -85,13 +92,6 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     label: "Settlements",
     Icon: CreditCard,
     blurb: "Record payments and reconcile what drivers still owe.",
-    ready: true,
-  },
-  {
-    slug: "notifications",
-    label: "Notifications",
-    Icon: Bell,
-    blurb: "Broadcast advisories to drivers and enforcers.",
     ready: true,
   },
   {

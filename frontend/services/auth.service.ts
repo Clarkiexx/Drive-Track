@@ -1,6 +1,6 @@
 import { z } from "zod";
 import api, { type ApiEnvelope } from "@/lib/axios";
-import type { Role } from "@/constants/roles";
+import { isRole, type Role } from "@/constants/roles";
 import { isVerificationStatus, type VerificationStatus } from "@/constants/violations";
 
 /**
@@ -30,9 +30,12 @@ export interface AuthUser {
    * Enforcers and admins log in through other endpoints that omit them, hence
    * optional.
    */
+  middleInitial?: string | null;
   licenseNumber?: string;
   address?: string | null;
   contactNumber?: string | null;
+  /** Backend-relative path of the driver's uploaded avatar, if any. */
+  profilePhotoPath?: string | null;
   /** Admin-set explanation shown to flagged / revoked / suspended drivers. */
   statusReason?: string | null;
   /**
@@ -54,18 +57,16 @@ export interface AuthSession {
 
 /* ----------------------------------------------------------------- zod in */
 
-export const driverLoginSchema = z.object({
-  fullName: z.string().trim().min(1, "Full name is required"),
+/**
+ * The unified sign-in the PWA posts to /auth/login: one identifier + password,
+ * no role picker. Drivers type their full name, staff their username — the
+ * backend detects which account matches and answers with `role`.
+ */
+export const unifiedLoginSchema = z.object({
+  identifier: z.string().trim().min(1, "Full name or username is required"),
   password: z.string().min(1, "Password is required"),
 });
-export type DriverLoginInput = z.infer<typeof driverLoginSchema>;
-
-/** Enforcer and admin logins share the same { username, password } shape. */
-export const staffLoginSchema = z.object({
-  username: z.string().trim().min(1, "Username is required"),
-  password: z.string().min(1, "Password is required"),
-});
-export type StaffLoginInput = z.infer<typeof staffLoginSchema>;
+export type UnifiedLoginInput = z.infer<typeof unifiedLoginSchema>;
 
 export const forgotPasswordSchema = z.object({
   fullName: z.string().trim().min(1, "Full name is required"),
@@ -107,16 +108,20 @@ export type DriverRegisterInput = z.infer<typeof driverRegisterSchema>;
 
 interface LoginPayload {
   token: string;
+  /** Present on the unified /auth/login response — the detected account role. */
+  role?: Role;
   mustChangePassword?: boolean;
   driver?: {
     driverId: number;
     firstName: string;
+    middleInitial?: string | null;
     lastName: string;
     verificationStatus?: string;
     licenseNumber?: string;
     address?: string | null;
     contactNumber?: string | null;
     statusReason?: string | null;
+    profilePhotoPath?: string | null;
   };
   enforcer?: {
     enforcerId: number;
@@ -131,12 +136,6 @@ interface LoginPayload {
     lastName: string;
   };
 }
-
-const LOGIN_PATH: Record<Role, string> = {
-  driver: "/auth/driver/login",
-  enforcer: "/auth/enforcer/login",
-  admin: "/auth/admin/login",
-};
 
 function toSession(role: Role, payload: LoginPayload | undefined): AuthSession {
   if (!payload?.token) {
@@ -157,6 +156,7 @@ function toSession(role: Role, payload: LoginPayload | undefined): AuthSession {
         id: driver.driverId,
         role: "driver",
         firstName: driver.firstName,
+        ...(driver.middleInitial ? { middleInitial: driver.middleInitial } : {}),
         lastName: driver.lastName,
         mustChangePassword,
         ...(status ? { verificationStatus: status } : {}),
@@ -166,6 +166,7 @@ function toSession(role: Role, payload: LoginPayload | undefined): AuthSession {
         ...(driver.address ? { address: driver.address } : {}),
         ...(driver.contactNumber ? { contactNumber: driver.contactNumber } : {}),
         ...(driver.statusReason ? { statusReason: driver.statusReason } : {}),
+        ...(driver.profilePhotoPath ? { profilePhotoPath: driver.profilePhotoPath } : {}),
       },
     };
   }
@@ -209,14 +210,21 @@ function toSession(role: Role, payload: LoginPayload | undefined): AuthSession {
 /* -------------------------------------------------------------- endpoints */
 
 export const authService = {
-  /** POST /auth/{driver|enforcer|admin}/login — credential shape depends on role. */
-  login: async (role: Role, credentials: DriverLoginInput | StaffLoginInput): Promise<AuthSession> => {
-    const body =
-      role === "driver"
-        ? driverLoginSchema.parse(credentials)
-        : staffLoginSchema.parse(credentials);
-    const res = await api.post<ApiEnvelope<LoginPayload>>(LOGIN_PATH[role], body);
-    return toSession(role, res.data?.data);
+  /**
+   * POST /auth/login — the unified sign-in. The backend detects which role
+   * the identifier + password belong to and answers with an explicit `role`;
+   * the payload is then mapped with the same per-role toSession() the
+   * per-role logins always used. The per-role endpoints remain for the
+   * native apps (driver-app / enforcer-app) and the Vite admin dashboard.
+   */
+  login: async (credentials: UnifiedLoginInput): Promise<AuthSession> => {
+    const body = unifiedLoginSchema.parse(credentials);
+    const res = await api.post<ApiEnvelope<LoginPayload>>("/auth/login", body);
+    const payload = res.data?.data;
+    if (!isRole(payload?.role)) {
+      throw new Error("Malformed login response: missing role");
+    }
+    return toSession(payload.role, payload);
   },
 
   /**

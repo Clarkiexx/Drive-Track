@@ -7,6 +7,22 @@ const uploadLicensePhoto = require('../middleware/uploadLicense');
 
 const router = express.Router();
 
+/**
+ * Unified login — the single door the web PWA uses. The account's role is
+ * detected server-side from which table the identifier + password match
+ * (see authController.unifiedLogin); the response carries an explicit `role`.
+ * The per-role logins below stay untouched for the native apps
+ * (driver-app / enforcer-app) and the Vite admin dashboard.
+ */
+router.post(
+  '/login',
+  [
+    body('identifier').trim().notEmpty().withMessage('Full name or username is required'),
+    body('password').notEmpty().withMessage('Password is required'),
+  ],
+  authController.unifiedLogin
+);
+
 router.post(
   '/driver/register',
   uploadLicensePhoto.single('licensePhoto'),

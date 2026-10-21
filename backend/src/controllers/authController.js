@@ -4,6 +4,7 @@ const { prisma, prismaErrorToHttp } = require('../lib/prisma');
 const { normalizeUsername, buildUsername } = require('../utils/username');
 const { signToken } = require('../utils/jwt');
 const { success, fail } = require('../utils/response');
+const { uploadLicenseImage, toProtectedLicensePath, deleteAsset } = require('../services/cloudinaryService');
 
 const SALT_ROUNDS = 10;
 
@@ -36,6 +37,8 @@ function respondWithMappedError(res, next, err, onConflict) {
  * If a record exists AND already has credentials, registration is rejected.
  */
 async function driverRegister(req, res, next) {
+  let uploadedLicense = null;
+  let persisted = false;
   try {
     if (!handleValidation(req, res)) return;
 
@@ -43,7 +46,6 @@ async function driverRegister(req, res, next) {
       nationality, sex, dateOfBirth, weightKg, heightM, expirationDate, agencyCode,
       bloodType, eyeColor, dlCodes, condition } = req.body;
     const cleanLicense = String(licenseNumber || '').trim();
-    const photoPath = req.file ? `/uploads/licenses/${req.file.filename}` : null;
 
     let driver = await prisma.driver.findFirst({
       where: { licenseNumber: { equals: cleanLicense, mode: 'insensitive' } },
@@ -51,6 +53,16 @@ async function driverRegister(req, res, next) {
 
     if (driver && driver.passwordHash) {
       return fail(res, 'An account already exists for this license number. Please log in instead.', 409);
+    }
+
+    // Upload only once the request is known to be a real registration — an
+    // already-claimed license number must not leave an orphaned asset behind.
+    // Neon stores the Cloudinary secure_url; clients get the admin-only proxy
+    // path via toProtectedLicensePath in driverLoginPayload.
+    let photoPath = null;
+    if (req.file) {
+      uploadedLicense = await uploadLicenseImage(req.file.buffer);
+      photoPath = uploadedLicense.secure_url;
     }
 
     const passwordHash = await bcrypt.hash(cleanLicense, SALT_ROUNDS);
@@ -115,8 +127,14 @@ async function driverRegister(req, res, next) {
       });
     }
 
+    persisted = true;
     return success(res, { driverId: driver.driverId, username: driver.username }, 'Registration successful', 201);
   } catch (err) {
+    // The DB write may have failed after the image was stored — remove the
+    // just-uploaded asset so a failed registration leaves no ghost photo.
+    if (uploadedLicense && !persisted) {
+      await deleteAsset(uploadedLicense.public_id, { type: 'authenticated' });
+    }
     // Unique violation (username or license number) keeps the old wording:
     // the license-number case was pre-checked above, so this is the
     // "same full name" path (or a concurrent race onto it).
@@ -169,6 +187,74 @@ async function driverForgotPassword(req, res, next) {
   }
 }
 
+/* ------------------------------------------------------ shared login pieces */
+
+/**
+ * Success payload for a driver login. Shared by the per-role login (native
+ * driver app) and the unified web login so the two can never drift apart.
+ */
+function driverLoginPayload(driver) {
+  return {
+    driverId: driver.driverId,
+    firstName: driver.firstName,
+    middleInitial: driver.middleInitial,
+    lastName: driver.lastName,
+    licenseNumber: driver.licenseNumber,
+    address: driver.address,
+    contactNumber: driver.contactNumber,
+    verificationStatus: driver.verificationStatus,
+    statusReason: driver.statusReason,
+    licensePhotoPath: toProtectedLicensePath(driver.licensePhotoPath),
+    profilePhotoPath: driver.profilePhotoPath,
+  };
+}
+
+/** Success payload for an enforcer login (per-role + unified). */
+function enforcerLoginPayload(enforcer) {
+  return {
+    enforcerId: enforcer.enforcerId,
+    firstName: enforcer.firstName,
+    lastName: enforcer.lastName,
+    badgeNumber: enforcer.badgeNumber,
+    station: enforcer.station,
+  };
+}
+
+/** Success payload for an admin login (per-role + unified). */
+function adminLoginPayload(admin) {
+  return {
+    adminId: admin.adminId,
+    firstName: admin.firstName,
+    lastName: admin.lastName,
+  };
+}
+
+/**
+ * Why a password-verified driver is still refused, as the exact message both
+ * login paths show. null means the account is cleared to sign in.
+ */
+function driverBlockedMessage(driver) {
+  if (driver.verificationStatus === 'revoked') {
+    return 'This account has been revoked. Please contact CTMO.';
+  }
+  if (driver.verificationStatus === 'flagged') {
+    return 'This account is currently flagged for review. Please contact CTMO.';
+  }
+  if (driver.verificationStatus === 'suspended') {
+    return 'This account has been suspended. Please contact CTMO.';
+  }
+  return null;
+}
+
+/** Enforcer counterpart of driverBlockedMessage. */
+function enforcerBlockedMessage(enforcer) {
+  if (enforcer.status === 'suspended') return 'This account has been suspended.';
+  if (enforcer.status === 'archived') {
+    return 'This account has been archived. Please contact CTMO.';
+  }
+  return null;
+}
+
 /**
  * Driver login: username = full name (case/format-insensitive), password = license number
  * (or the driver's own password after they've changed it).
@@ -191,15 +277,8 @@ async function driverLogin(req, res, next) {
       return fail(res, 'Invalid credentials', 401);
     }
 
-    if (driver.verificationStatus === 'revoked') {
-      return fail(res, 'This account has been revoked. Please contact CTMO.', 403);
-    }
-    if (driver.verificationStatus === 'flagged') {
-      return fail(res, 'This account is currently flagged for review. Please contact CTMO.', 403);
-    }
-    if (driver.verificationStatus === 'suspended') {
-      return fail(res, 'This account has been suspended. Please contact CTMO.', 403);
-    }
+    const blocked = driverBlockedMessage(driver);
+    if (blocked) return fail(res, blocked, 403);
 
     const token = signToken({
       id: driver.driverId,
@@ -210,18 +289,7 @@ async function driverLogin(req, res, next) {
     return success(res, {
       token,
       mustChangePassword: driver.mustChangePassword,
-      driver: {
-        driverId: driver.driverId,
-        firstName: driver.firstName,
-        middleInitial: driver.middleInitial,
-        lastName: driver.lastName,
-        licenseNumber: driver.licenseNumber,
-        address: driver.address,
-        contactNumber: driver.contactNumber,
-        verificationStatus: driver.verificationStatus,
-        statusReason: driver.statusReason,
-        licensePhotoPath: driver.licensePhotoPath,
-      },
+      driver: driverLoginPayload(driver),
     }, 'Login successful');
   } catch (err) {
     return respondWithMappedError(res, next, err);
@@ -305,24 +373,14 @@ async function enforcerLogin(req, res, next) {
     const match = await bcrypt.compare(password, enforcer.passwordHash);
     if (!match) return fail(res, 'Invalid credentials', 401);
 
-    if (enforcer.status === 'suspended') {
-      return fail(res, 'This account has been suspended.', 403);
-    }
-    if (enforcer.status === 'archived') {
-      return fail(res, 'This account has been archived. Please contact CTMO.', 403);
-    }
+    const blocked = enforcerBlockedMessage(enforcer);
+    if (blocked) return fail(res, blocked, 403);
 
     const token = signToken({ id: enforcer.enforcerId, role: 'enforcer' });
 
     return success(res, {
       token,
-      enforcer: {
-        enforcerId: enforcer.enforcerId,
-        firstName: enforcer.firstName,
-        lastName: enforcer.lastName,
-        badgeNumber: enforcer.badgeNumber,
-        station: enforcer.station,
-      },
+      enforcer: enforcerLoginPayload(enforcer),
     }, 'Login successful');
   } catch (err) {
     return respondWithMappedError(res, next, err);
@@ -346,12 +404,107 @@ async function adminLogin(req, res, next) {
 
     return success(res, {
       token,
-      admin: {
-        adminId: admin.adminId,
-        firstName: admin.firstName,
-        lastName: admin.lastName,
-      },
+      admin: adminLoginPayload(admin),
     }, 'Login successful');
+  } catch (err) {
+    return respondWithMappedError(res, next, err);
+  }
+}
+
+/**
+ * Unified login — the single door the web PWA uses (POST /auth/login).
+ *
+ * The caller sends ONE identifier (a driver's full name or a staff username)
+ * and a password, and does not say which kind of account they are. This
+ * handler tries every table and the password decides:
+ *
+ *   1. driver   — identifier normalized via normalizeUsername(), the same
+ *                 comparison driverLogin uses (driver usernames are stored as
+ *                 normalized full names);
+ *   2. enforcer — username, case-insensitive;
+ *   3. admin    — username, case-insensitive.
+ *
+ * The first table whose record AND password match wins, so a name that
+ * collides across tables still resolves to the account whose password was
+ * actually given. Every rejected combination answers the same generic 401,
+ * so this endpoint cannot be used to probe which table an account lives in.
+ *
+ * Each branch reuses the exact status gates and success payloads of the
+ * per-role logins above (which the native apps and the Vite admin dashboard
+ * keep calling), and the response adds an explicit `role` field so the
+ * client knows which session slots the token belongs in.
+ */
+async function unifiedLogin(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+
+    const { identifier, password } = req.body;
+    const cleanIdentifier = String(identifier || '').trim();
+
+    // 1) Driver — login username is the normalized full name; the compared
+    //    password is trimmed exactly as driverLogin trims it.
+    const driver = await prisma.driver.findFirst({
+      where: { username: normalizeUsername(cleanIdentifier) },
+    });
+    if (
+      driver &&
+      driver.passwordHash &&
+      (await bcrypt.compare(String(password || '').trim(), driver.passwordHash))
+    ) {
+      const blocked = driverBlockedMessage(driver);
+      if (blocked) return fail(res, blocked, 403);
+
+      const token = signToken({
+        id: driver.driverId,
+        role: 'driver',
+        mustChangePassword: driver.mustChangePassword,
+      });
+
+      return success(res, {
+        token,
+        role: 'driver',
+        mustChangePassword: driver.mustChangePassword,
+        driver: driverLoginPayload(driver),
+      }, 'Login successful');
+    }
+
+    // 2) Enforcer — username, case-insensitive; password compared raw, as
+    //    enforcerLogin compares it.
+    const enforcer = await prisma.enforcer.findFirst({
+      where: { username: { equals: cleanIdentifier, mode: 'insensitive' } },
+    });
+    if (
+      enforcer &&
+      enforcer.passwordHash &&
+      (await bcrypt.compare(password, enforcer.passwordHash))
+    ) {
+      const blocked = enforcerBlockedMessage(enforcer);
+      if (blocked) return fail(res, blocked, 403);
+
+      const token = signToken({ id: enforcer.enforcerId, role: 'enforcer' });
+
+      return success(res, {
+        token,
+        role: 'enforcer',
+        enforcer: enforcerLoginPayload(enforcer),
+      }, 'Login successful');
+    }
+
+    // 3) Admin — username, case-insensitive.
+    const admin = await prisma.admin.findFirst({
+      where: { username: { equals: cleanIdentifier, mode: 'insensitive' } },
+    });
+    if (admin && admin.passwordHash && (await bcrypt.compare(password, admin.passwordHash))) {
+      const token = signToken({ id: admin.adminId, role: 'admin' });
+
+      return success(res, {
+        token,
+        role: 'admin',
+        admin: adminLoginPayload(admin),
+      }, 'Login successful');
+    }
+
+    return fail(res, 'Invalid credentials', 401);
   } catch (err) {
     return respondWithMappedError(res, next, err);
   }
@@ -365,4 +518,5 @@ module.exports = {
   enforcerLogin,
   enforcerChangePassword,
   adminLogin,
+  unifiedLogin,
 };

@@ -1,11 +1,13 @@
 // One-time script that loads the bundled Learning Center catalogue into the
-// admin-managed `learning_signs` + `learning_quiz_questions` tables.
+// admin-managed `learning_signs` + `learning_quiz_questions` +
+// `learning_educational_questions` tables.
 // Run once with: npx tsx seed-learning.js   (npm run seed:learning)
 //
 // The bundled catalogue (frontend/data/trafficSigns.ts — the offline
-// fallback the driver UI still ships with) is the seed source: all signs and
-// quiz questions are read from it directly under tsx and inserted with
-// their stable ids, so quiz `signId` references line up exactly.
+// fallback the driver UI still ships with) is the seed source: all signs,
+// quiz questions and educational practice questions are read from it
+// directly under tsx and inserted with their stable ids, so quiz `signId`
+// references line up exactly.
 //
 // Idempotent by design: rows that already exist are left untouched — after
 // the first seed the ADMIN owns the content, and re-running must never
@@ -19,7 +21,7 @@ require('dotenv').config();
 
 const { prisma } = require('./src/lib/prisma');
 const learningRepository = require('./src/repositories/learningRepository');
-const { trafficSigns, quizQuestions } = require('../frontend/data/trafficSigns');
+const { trafficSigns, quizQuestions, educationalQuestions } = require('../frontend/data/trafficSigns');
 
 async function seed() {
   await learningRepository.ensureTables();
@@ -85,6 +87,35 @@ async function seed() {
     questionsCreated += 1;
   }
   console.log(`Quiz questions: ${questionsCreated} created, ${questionsKept} already present`);
+
+  let educationalCreated = 0;
+  let educationalKept = 0;
+  for (const [index, entry] of educationalQuestions.entries()) {
+    // eslint-disable-next-line no-await-in-loop
+    const existing = await prisma.learningEducationalQuestion.findUnique({
+      where: { id: entry.id },
+    });
+    if (existing) {
+      educationalKept += 1;
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await prisma.learningEducationalQuestion.create({
+      data: {
+        id: entry.id,
+        question: entry.question,
+        options: entry.options,
+        correctIndex: entry.correctIndex,
+        // Keep the curated file order as the admin-visible default order.
+        sortOrder: index,
+        isActive: true,
+      },
+    });
+    educationalCreated += 1;
+  }
+  console.log(
+    `Educational questions: ${educationalCreated} created, ${educationalKept} already present`
+  );
 
   await prisma.$disconnect();
 }

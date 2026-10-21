@@ -103,8 +103,8 @@ export function proxy(request: NextRequest) {
   //
   //    There used to be one here, and it made it impossible to switch roles in a
   //    normal browser: with any session cookie present, /login 307'd away before
-  //    React ran, so the account-type picker and the submit button never
-  //    rendered. A signed-in driver literally could not reach the form to log in
+  //    React ran, so the login form never rendered. A signed-in driver
+  //    literally could not reach the form to log in
   //    as an enforcer or an admin — the only way out was Incognito or clearing
   //    storage. (RoleGate still keeps each role out of the others' workspaces;
   //    this rule only ever governed whether the LOGIN FORM was reachable.)

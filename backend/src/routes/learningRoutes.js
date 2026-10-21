@@ -6,7 +6,8 @@ const allowRoles = require('../middleware/role');
 
 const router = express.Router();
 
-// Any logged-in role (driver/enforcer/admin) can read the catalogue + quiz.
+// Any logged-in role (driver/enforcer/admin) can read the catalogue, the quiz
+// and the educational practice set.
 router.use(authenticate);
 
 /**
@@ -152,5 +153,46 @@ const quizPatchBody = [
 
 router.patch('/quiz/:id', allowRoles('admin'), quizPatchBody, learningController.updateQuizQuestion);
 router.patch('/quiz/:id/status', allowRoles('admin'), learningController.updateQuizQuestionStatus);
+
+/* --- Educational practice questions ---------------------------------------- */
+
+router.get('/educational', learningController.listEducational);
+
+const educationalBody = [
+  body('question').trim().notEmpty().withMessage('Question is required').isLength({ max: 300 }),
+  body('options')
+    .isArray({ min: 3, max: 4 })
+    .withMessage('3 or 4 answer options are required'),
+  body('options.*').trim().notEmpty().withMessage('Answer options cannot be empty'),
+  body('correctIndex')
+    .isInt({ min: 0, max: 3 })
+    .withMessage('The correct answer must be option 1-4'),
+  body('sortOrder')
+    .optional({ values: 'null' })
+    .isInt({ min: 0, max: 9999 })
+    .withMessage('Sort order must be an integer between 0 and 9999'),
+];
+
+router.post('/educational', allowRoles('admin'), educationalBody, learningController.createEducational);
+
+const educationalPatchBody = [
+  body('question').optional().trim().notEmpty().withMessage('Question cannot be empty').isLength({ max: 300 }),
+  body('options')
+    .optional()
+    .isArray({ min: 3, max: 4 })
+    .withMessage('3 or 4 answer options are required'),
+  body('options.*').trim().notEmpty().withMessage('Answer options cannot be empty'),
+  body('correctIndex')
+    .optional()
+    .isInt({ min: 0, max: 3 })
+    .withMessage('The correct answer must be option 1-4'),
+  body('sortOrder')
+    .optional({ values: 'null' })
+    .isInt({ min: 0, max: 9999 })
+    .withMessage('Sort order must be an integer between 0 and 9999'),
+];
+
+router.patch('/educational/:id', allowRoles('admin'), educationalPatchBody, learningController.updateEducational);
+router.patch('/educational/:id/status', allowRoles('admin'), learningController.updateEducationalStatus);
 
 module.exports = router;

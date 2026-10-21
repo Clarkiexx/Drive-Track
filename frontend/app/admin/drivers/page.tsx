@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RotateCw, Search, Users } from "lucide-react";
 
+import DriverAvatar from "@/components/common/DriverAvatar";
 import EmptyState from "@/components/common/EmptyState";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
@@ -255,13 +256,23 @@ export default function AdminDriversPage() {
                       className="border-b border-console-line/70 transition-colors last:border-0 hover:bg-brand-50/70"
                     >
                       <td className="px-5 py-3.5 align-top">
-                        <p className="text-[13px] font-bold text-ink">
-                          {driver.lastName}, {driver.firstName}
-                          {driver.middleInitial ? ` ${driver.middleInitial}` : ""}
-                        </p>
-                        <p className="tabular mt-1 text-[11.5px] leading-none text-console-muted">
-                          {driver.licenseNumber}
-                        </p>
+                        <div className="flex items-center gap-2.5">
+                          <DriverAvatar
+                            firstName={driver.firstName}
+                            lastName={driver.lastName}
+                            photoPath={driver.profilePhotoPath}
+                            size="sm"
+                          />
+                          <div className="min-w-0">
+                            <p className="text-[13px] font-bold text-ink">
+                              {driver.lastName}, {driver.firstName}
+                              {driver.middleInitial ? ` ${driver.middleInitial}` : ""}
+                            </p>
+                            <p className="tabular mt-1 text-[11.5px] leading-none text-console-muted">
+                              {driver.licenseNumber}
+                            </p>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
                         {driver.contactNumber || "—"}
@@ -657,6 +668,23 @@ function DriverDetailDialog({
 
                 <div>
                   <h4 className="text-[12px] font-bold tracking-[0.12em] text-console-muted uppercase">
+                    Profile photo
+                  </h4>
+                  <div className="mt-1.5 flex items-center gap-3 rounded-xl border border-console-line bg-console-canvas/60 p-3">
+                    <DriverAvatar
+                      firstName={driver.firstName}
+                      lastName={driver.lastName}
+                      photoPath={driver.profilePhotoPath}
+                      size="lg"
+                    />
+                    <p className="min-w-0 text-[12.5px] leading-relaxed text-console-muted">
+                      {driver.profilePhotoPath
+                        ? "Chosen by the driver in My Profile. Updates when the driver changes their picture."
+                        : "No profile photo set. The driver can add one from My Profile."}
+                    </p>
+                  </div>
+
+                  <h4 className="mt-4 text-[12px] font-bold tracking-[0.12em] text-console-muted uppercase">
                     License photo
                   </h4>
                   <div className="mt-1.5 overflow-hidden rounded-xl border border-console-line bg-console-canvas/60">

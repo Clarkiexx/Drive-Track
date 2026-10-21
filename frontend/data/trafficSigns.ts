@@ -118,6 +118,18 @@ export interface QuizQuestion {
   correctIndex: number;
 }
 
+/**
+ * A text-only "Educational" practice question — no sign plate. Serves as the
+ * seed source for learning_educational_questions and the offline fallback for
+ * the driver's Educational views (Learning Center chip + Educational Quiz).
+ */
+export interface EducationalQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+}
+
 export const trafficSigns: TrafficSign[] = [
   // --- Regulatory signs: red/white, tell drivers what they MUST or MUST NOT do ---
   {
@@ -785,6 +797,127 @@ export const quizQuestions: QuizQuestion[] = [
     question: "A circular sign marked 3.5m limits:",
     options: ["Vehicle height", "Vehicle speed", "Vehicle weight", "Road width"],
     correctIndex: 0,
+  },
+];
+
+/**
+ * The "Educational" practice section — study questions with the answer
+ * highlighted (the scored Quiz above is separate). Seeds
+ * learning_educational_questions and doubles as the driver page's offline
+ * fallback; admins edit the live rows in the Learning Center.
+ */
+export const educationalQuestions: EducationalQuestion[] = [
+  {
+    id: "edu-red-light",
+    question: "What does a steady red traffic light mean?",
+    options: ["Slow down only", "Stop", "Speed up"],
+    correctIndex: 1,
+  },
+  {
+    id: "edu-flashing-yellow",
+    question: "What does a flashing yellow traffic light mean?",
+    options: ["Proceed with caution", "Stop until it turns green", "The road is closed"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-pedestrian-crossing",
+    question: "What should you do when approaching a pedestrian crossing with pedestrians crossing?",
+    options: ["Speed up", "Sound your horn continuously", "Slow down and yield to pedestrians"],
+    correctIndex: 2,
+  },
+  {
+    id: "edu-stop-sign",
+    question: "What does a STOP sign require?",
+    options: ["Stop completely", "Slow down only", "Stop only if other vehicles are present"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-changing-lanes",
+    question: "What should you do before changing lanes?",
+    options: ["Signal, check mirrors and blind spots", "Honk and move immediately", "Brake suddenly"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-defensive-driving",
+    question: "What is defensive driving?",
+    options: [
+      "Driving aggressively to avoid delays",
+      "Anticipating hazards and preventing collisions",
+      "Following other vehicles closely",
+    ],
+    correctIndex: 1,
+  },
+  {
+    id: "edu-emergency-vehicle",
+    question:
+      "What should you do when an emergency vehicle approaches with its siren and flashing lights?",
+    options: ["Race ahead of it", "Ignore it", "Safely give way"],
+    correctIndex: 2,
+  },
+  {
+    id: "edu-unsafe-overtaking",
+    question: "When is it unsafe to overtake?",
+    options: [
+      "When the road ahead is clear and overtaking is permitted",
+      "When approaching a blind curve or hillcrest",
+      "When there is sufficient visibility and space",
+    ],
+    correctIndex: 1,
+  },
+  {
+    id: "edu-wet-road",
+    question: "What should you do if the road is wet?",
+    options: [
+      "Increase your speed",
+      "Brake harshly at every turn",
+      "Reduce speed and increase following distance",
+    ],
+    correctIndex: 2,
+  },
+  {
+    id: "edu-broken-lane-line",
+    question: "What does a broken lane line generally indicate?",
+    options: ["A lane change may be permitted when safe", "Overtaking is always prohibited", "You must stop"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-roundabout",
+    question: "What should you do before entering a roundabout?",
+    options: [
+      "Enter without checking",
+      "Yield to traffic already circulating, as required",
+      "Always stop in the middle",
+    ],
+    correctIndex: 1,
+  },
+  {
+    id: "edu-driver-fatigue",
+    question: "What should you do if you feel sleepy while driving?",
+    options: [
+      "Open the window and continue regardless",
+      "Drive faster to reach your destination",
+      "Stop somewhere safe and rest",
+    ],
+    correctIndex: 2,
+  },
+  {
+    id: "edu-seat-belt",
+    question: "What is the purpose of a seat belt?",
+    options: ["To reduce injury risk in a crash", "To allow faster driving", "To replace airbags completely"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-school-zone",
+    question: "What should you do when approaching a school zone with children nearby?",
+    options: ["Slow down and watch carefully", "Overtake other vehicles quickly", "Use your horn continuously"],
+    correctIndex: 0,
+  },
+  {
+    id: "edu-enforcer-instruction",
+    question:
+      "What should you do if a traffic enforcer gives a lawful traffic instruction that differs from a traffic signal?",
+    options: ["Ignore the enforcer", "Follow the lawful instruction", "Choose whichever is faster"],
+    correctIndex: 1,
   },
 ];
 

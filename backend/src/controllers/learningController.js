@@ -6,9 +6,10 @@ const { prisma } = require('../lib/prisma');
 const learningRepository = require('../repositories/learningRepository');
 
 /**
- * Learning Center management — the road-sign catalogue and quiz questions
- * the driver Learning Center + Quiz read. Read routes are open to every
- * logged-in role; every mutation is admin-only (enforced in the routes).
+ * Learning Center management — the road-sign catalogue, quiz questions and
+ * the "Educational" practice set the driver pages read. Read routes are open
+ * to every logged-in role; every mutation is admin-only (enforced in the
+ * routes).
  *
  * Habits borrowed from violationTypeController:
  *  - deactivate, never hard-delete (history and quizzes keep their row);
@@ -350,6 +351,161 @@ async function updateQuizQuestionStatus(req, res, next) {
   }
 }
 
+/** GET /learning/educational?active=true — any logged-in role. */
+async function listEducational(req, res, next) {
+  try {
+    await learningRepository.ensureTables();
+
+    const where = {};
+    if (req.query.active === 'true') where.isActive = true;
+
+    const questions = await prisma.learningEducationalQuestion.findMany({
+      where,
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    return success(res, questions);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * The correct answer must point at a filled option — enforced here because
+ * express-validator cannot compare two body fields (the admin dialog mirrors
+ * this check client-side).
+ */
+function correctIndexError(options, correctIndex) {
+  if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) {
+    return 'The correct answer must point at one of the filled options';
+  }
+  return null;
+}
+
+/** POST /learning/educational — admin only. */
+async function createEducational(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+    await learningRepository.ensureTables();
+
+    const { question, options, correctIndex, sortOrder } = req.body;
+
+    const indexError = correctIndexError(options, correctIndex);
+    if (indexError) return fail(res, indexError, 422);
+
+    // New questions land at the end of the study list unless an order is set.
+    let order = sortOrder;
+    if (order === undefined || order === null) {
+      const max = await prisma.learningEducationalQuestion.aggregate({
+        _max: { sortOrder: true },
+      });
+      order = (max._max.sortOrder ?? -1) + 1;
+    }
+
+    const created = await prisma.learningEducationalQuestion.create({
+      data: {
+        id: crypto.randomUUID(),
+        question,
+        options,
+        correctIndex,
+        sortOrder: order,
+        isActive: true,
+      },
+    });
+
+    logAdminAction(
+      req.user.id,
+      'created_learning_educational',
+      'learning_educational',
+      null,
+      created.question.slice(0, 240)
+    );
+    return success(res, created, 'Educational question created', 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** PATCH /learning/educational/:id — admin only, partial update. */
+async function updateEducational(req, res, next) {
+  try {
+    if (!handleValidation(req, res)) return;
+    await learningRepository.ensureTables();
+
+    const existing = await prisma.learningEducationalQuestion.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!existing) return fail(res, 'Educational question not found', 404);
+
+    const { question, options, correctIndex, sortOrder } = req.body;
+
+    // Cross-field guard against whichever side of the pair is changing.
+    const nextOptions = options !== undefined ? options : existing.options;
+    const nextIndex = correctIndex !== undefined ? correctIndex : existing.correctIndex;
+    const indexError = correctIndexError(nextOptions, nextIndex);
+    if (indexError) return fail(res, indexError, 422);
+
+    const data = {};
+    if (question !== undefined) data.question = question;
+    if (options !== undefined) data.options = options;
+    if (correctIndex !== undefined) data.correctIndex = correctIndex;
+    if (sortOrder !== undefined && sortOrder !== null) data.sortOrder = sortOrder;
+
+    const updated =
+      Object.keys(data).length > 0
+        ? await prisma.learningEducationalQuestion.update({ where: { id: existing.id }, data })
+        : existing;
+
+    logAdminAction(
+      req.user.id,
+      'updated_learning_educational',
+      'learning_educational',
+      null,
+      updated.question.slice(0, 240)
+    );
+    return success(res, updated, 'Educational question updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** PATCH /learning/educational/:id/status — activate/deactivate, never hard-delete. */
+async function updateEducationalStatus(req, res, next) {
+  try {
+    await learningRepository.ensureTables();
+
+    const { isActive } = req.body;
+    if (typeof isActive !== 'boolean') {
+      return fail(res, 'isActive must be true or false', 422);
+    }
+
+    const existing = await prisma.learningEducationalQuestion.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!existing) return fail(res, 'Educational question not found', 404);
+
+    const updated = await prisma.learningEducationalQuestion.update({
+      where: { id: existing.id },
+      data: { isActive },
+    });
+
+    logAdminAction(
+      req.user.id,
+      isActive ? 'activated_learning_educational' : 'deactivated_learning_educational',
+      'learning_educational',
+      null,
+      updated.question.slice(0, 240)
+    );
+    return success(
+      res,
+      updated,
+      isActive ? 'Educational question activated' : 'Educational question deactivated'
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listSigns,
   createSign,
@@ -359,4 +515,8 @@ module.exports = {
   createQuizQuestion,
   updateQuizQuestion,
   updateQuizQuestionStatus,
+  listEducational,
+  createEducational,
+  updateEducational,
+  updateEducationalStatus,
 };

@@ -41,6 +41,19 @@ export interface LearningQuizRecord {
   sign?: LearningSignRecord | null;
 }
 
+/**
+ * The "Educational" practice section — text-only study questions (no sign).
+ * `options` holds 3 or 4 answers; `correctIndex` is 0-based into it.
+ */
+export interface LearningEducationalRecord {
+  id: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+  sortOrder: number;
+  isActive: boolean;
+}
+
 const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
 
 const hexColor = (message: string) => z.string().regex(HEX_COLOR, message);
@@ -93,6 +106,34 @@ export type LearningQuizCreateInput = z.infer<typeof learningQuizCreateSchema>;
 
 export const learningQuizUpdateSchema = learningQuizCreateSchema.partial();
 export type LearningQuizUpdateInput = z.infer<typeof learningQuizUpdateSchema>;
+
+export const learningEducationalCreateSchema = z.object({
+  question: z
+    .string()
+    .trim()
+    .min(1, "Question is required")
+    .max(300, "Question must be 300 characters or fewer"),
+  options: z
+    .array(z.string().trim().min(1, "Answer options cannot be empty"))
+    .min(3, "At least 3 answer options are required")
+    .max(4, "At most 4 answer options are allowed"),
+  correctIndex: z.coerce
+    .number()
+    .int("The correct answer must be option 1-4")
+    .min(0, "The correct answer must be option 1-4")
+    .max(3, "The correct answer must be option 1-4"),
+  sortOrder: z.coerce
+    .number()
+    .int("Sort order must be a whole number")
+    .min(0, "Sort order cannot be negative")
+    .max(9999, "Sort order must be 9999 or lower")
+    .optional(),
+});
+export type LearningEducationalCreateInput = z.infer<typeof learningEducationalCreateSchema>;
+
+/** PATCH validates only what is sent; the admin dialog sends the full form. */
+export const learningEducationalUpdateSchema = learningEducationalCreateSchema.partial();
+export type LearningEducationalUpdateInput = z.infer<typeof learningEducationalUpdateSchema>;
 
 export const learningService = {
   /** GET /learning/signs — ?active=true narrows to rows the driver app shows. */
@@ -176,6 +217,63 @@ export const learningService = {
       isActive,
     });
     if (!res.data?.data) throw new Error("Malformed quiz question response");
+    return res.data.data;
+  },
+
+  /** GET /learning/educational — the "Educational" practice section. */
+  listEducational: async (
+    params: { active?: boolean | string } = {}
+  ): Promise<LearningEducationalRecord[]> => {
+    const res = await api.get<ApiEnvelope<LearningEducationalRecord[]>>(
+      "/learning/educational",
+      {
+        params: params.active !== undefined ? { active: String(params.active) } : {},
+      }
+    );
+    return res.data?.data ?? [];
+  },
+
+  /** Convenience for the driver Educational Quiz. */
+  listActiveEducational: async (): Promise<LearningEducationalRecord[]> =>
+    learningService.listEducational({ active: true }),
+
+  /** POST /learning/educational — admin only. */
+  createEducational: async (
+    input: LearningEducationalCreateInput
+  ): Promise<LearningEducationalRecord> => {
+    const body = learningEducationalCreateSchema.parse(input);
+    const res = await api.post<ApiEnvelope<LearningEducationalRecord>>(
+      "/learning/educational",
+      body
+    );
+    if (!res.data?.data) throw new Error("Malformed educational question response");
+    return res.data.data;
+  },
+
+  /** PATCH /learning/educational/:id — admin only, partial update. */
+  updateEducational: async (
+    id: string,
+    input: LearningEducationalUpdateInput
+  ): Promise<LearningEducationalRecord> => {
+    const body = learningEducationalUpdateSchema.parse(input);
+    const res = await api.patch<ApiEnvelope<LearningEducationalRecord>>(
+      `/learning/educational/${id}`,
+      body
+    );
+    if (!res.data?.data) throw new Error("Malformed educational question response");
+    return res.data.data;
+  },
+
+  /** PATCH /learning/educational/:id/status — { isActive: boolean }. */
+  updateEducationalStatus: async (
+    id: string,
+    isActive: boolean
+  ): Promise<LearningEducationalRecord> => {
+    const res = await api.patch<ApiEnvelope<LearningEducationalRecord>>(
+      `/learning/educational/${id}/status`,
+      { isActive }
+    );
+    if (!res.data?.data) throw new Error("Malformed educational question response");
     return res.data.data;
   },
 };

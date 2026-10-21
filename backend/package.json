@@ -14,13 +14,15 @@
     "seed:admin": "tsx seed-admin.js",
     "seed:enforcer": "tsx seed-enforcer.js",
     "seed:violation-types": "tsx seed-violation-types.js",
-    "seed:knowledge": "tsx seed-knowledge.js"
+    "seed:knowledge": "tsx seed-knowledge.js",
+    "seed:learning": "tsx seed-learning.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-pg": "7.7.0",
     "@prisma/client": "7.8.0",
     "bcrypt": "^5.1.1",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

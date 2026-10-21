@@ -1,76 +1,66 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { ShieldCheck, Truck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
 import { getApiErrorMessage } from "@/lib/axios";
-import { homeForRole, type Role } from "@/constants/roles";
+import { homeForRole } from "@/constants/roles";
 
 import AuthCard from "../_components/AuthCard";
 import PasswordField from "../_components/PasswordField";
 import PrimaryButton from "../_components/PrimaryButton";
 import { resolveNextTarget } from "../_lib/next-target";
-// The portal lives in the layout so the frame can dress /login as the admin
-// console on a desktop; a child cannot pass state up, so this is the channel.
-import { useAuthPortal } from "../layout";
-import { SegmentedOptions } from "@/components/common/OptionCard";
+// The desk lives in the layout so the frame can dress /login as the admin
+// console on a desktop; a child cannot hand state up, so this is the channel.
+import { useAuthDesk } from "../layout";
 import FormField from "@/components/common/FormField";
 
-/** Which credential shape the backend expects for each portal. */
-const PORTALS: { value: Role; label: string }[] = [
-  { value: "driver", label: "Driver" },
-  { value: "enforcer", label: "Enforcer" },
-  { value: "admin", label: "Admin" },
-];
-
-const SUBTITLE: Record<Role, string> = {
-  driver: "Sign in to view and settle your violations.",
-  enforcer: "Sign in to issue citations and search driver records.",
-  admin: "Sign in to manage drivers, citations and settlements.",
-};
-
+/**
+ * The single sign-in form for every role. The user types their full name
+ * (drivers) or username (enforcers and admins) plus their password; the
+ * backend detects which account the credentials belong to (POST /auth/login)
+ * and this page sends them to whichever dashboard that role owns.
+ */
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login } = useAuth();
+  const { setDesk } = useAuthDesk();
 
-  // Shared with the (auth) layout, which reads it to pick the desk treatment
-  // at large widths. It keeps this page's default of "driver" so nothing
-  // changes for anyone arriving at /login without touching the switcher.
-  const { role, setRole } = useAuthPortal();
-  const [fullName, setFullName] = useState("");
-  const [username, setUsername] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
 
-  const isDriver = role === "driver";
+  const next = searchParams.get("next");
+
+  // Arriving from the admin area (?next=/admin/…) dresses the desk as the
+  // console the visitor was headed for; everything else keeps the plain frame.
+  // Deferred a tick like AuthContext.restoreSession — committing state
+  // straight from an effect body is what react-hooks/set-state-in-effect flags.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDesk(next?.startsWith("/admin") ? "console" : "plain");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [next, setDesk]);
 
   async function handleSubmit() {
     setFieldError(null);
 
-    const identity = isDriver ? fullName.trim() : username.trim();
-    if (!identity || !password.trim()) {
-      setFieldError(
-        isDriver
-          ? "Please enter both your full name and license number or password."
-          : "Please enter your username and password.",
-      );
+    if (!identifier.trim() || !password.trim()) {
+      setFieldError("Please enter your full name or username and your password.");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const session = await login(
-        role,
-        isDriver
-          ? { fullName: fullName.trim(), password: password.trim() }
-          : { username: username.trim(), password: password.trim() },
-      );
+      // The role is detected server-side from the credentials themselves.
+      const session = await login({ identifier: identifier.trim(), password: password.trim() });
 
       // login() has already navigated. If the driver still owes a password
       // change, stop here and honour neither `next` nor the role home: the
@@ -82,10 +72,10 @@ function LoginForm() {
         return;
       }
 
-      // If the proxy remembered a page inside this role's own space, honour
-      // that instead.
-      const next = resolveNextTarget(searchParams.get("next"), role);
-      router.replace(next ?? homeForRole(role));
+      // If the proxy remembered a page inside the DETECTED role's own space,
+      // honour that instead.
+      const target = resolveNextTarget(searchParams.get("next"), session.user.role);
+      router.replace(target ?? homeForRole(session.user.role));
     } catch (error) {
       // The backend's own wording is the most useful thing we can show.
       toast.error(getApiErrorMessage(error, "Unable to log in. Please try again."));
@@ -97,55 +87,30 @@ function LoginForm() {
   return (
     <AuthCard
       title="Welcome back"
-      subtitle={SUBTITLE[role]}
-      icon={
-        isDriver ? (
-          <Truck size={21} strokeWidth={2} aria-hidden />
-        ) : (
-          <ShieldCheck size={21} strokeWidth={2} aria-hidden />
-        )
-      }
+      subtitle="Sign in to continue to DriveTrack."
+      icon={<ShieldCheck size={21} strokeWidth={2} aria-hidden />}
     >
-      <SegmentedOptions
-        label="Account type"
-        value={role}
-        onChange={(next) => {
-          setRole(next);
-          setFieldError(null);
-        }}
-        options={PORTALS}
+      <FormField
+        label="Full Name or Username"
+        required
+        autoComplete="username"
+        placeholder="e.g., Juan Dela Cruz or your staff username"
+        hint="Drivers enter their full name; enforcers and admins their username."
+        value={identifier}
+        onChange={(event) => setIdentifier(event.target.value)}
       />
-
-      <div className="mt-4">
-        {isDriver ? (
-          <FormField
-            label="Full Name"
-            required
-            autoComplete="name"
-            placeholder="e.g., Juan Dela Cruz"
-            value={fullName}
-            onChange={(event) => setFullName(event.target.value)}
-          />
-        ) : (
-          <FormField
-            label="Username"
-            required
-            autoComplete="username"
-            placeholder="Enter your username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-          />
-        )}
-      </div>
 
       <PasswordField
         className="mt-3.5"
-        label={isDriver ? "License Number / Password" : "Password"}
+        label="Password"
         required
-        placeholder={isDriver ? "e.g., N01-12-345678" : "Enter your password"}
+        placeholder="Enter your password"
         value={password}
         onChange={setPassword}
       />
+      <p className="mt-2 text-[11px] leading-snug text-muted">
+        Drivers signing in for the first time use their license number as the password.
+      </p>
 
       {fieldError ? (
         <p role="alert" className="mt-3 text-[13px] font-semibold text-signal-stop">
@@ -157,26 +122,24 @@ function LoginForm() {
         Log In
       </PrimaryButton>
 
-      {isDriver ? (
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <Link
-            href="/register"
-            className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
-          >
-            Create an account
-          </Link>
-          <Link
-            href="/forgot-password"
-            className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
-          >
-            Forgot password?
-          </Link>
-        </div>
-      ) : (
-        <p className="mt-4 text-center text-[12px] leading-relaxed text-muted">
-          Don&apos;t have an account? Contact your CTMO administrator.
-        </p>
-      )}
+      <div className="mt-4 flex items-center justify-between gap-4">
+        <Link
+          href="/register"
+          className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
+        >
+          Create an account
+        </Link>
+        <Link
+          href="/forgot-password"
+          className="text-[14px] font-semibold text-brand-500 underline-offset-2 hover:underline"
+        >
+          Forgot password?
+        </Link>
+      </div>
+
+      <p className="mt-3 text-center text-[12px] leading-relaxed text-muted">
+        Enforcer and admin accounts are provisioned by your CTMO administrator.
+      </p>
     </AuthCard>
   );
 }

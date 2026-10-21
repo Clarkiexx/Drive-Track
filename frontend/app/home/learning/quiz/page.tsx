@@ -1,14 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronLeft, X } from "lucide-react";
 
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
+import EmptyState from "@/components/common/EmptyState";
 import PageBody from "@/components/common/PageBody";
 import SignShape from "@/components/common/SignShape";
-import { findSignById, quizQuestions, type QuizQuestion } from "@/data/trafficSigns";
+import {
+  findSignById,
+  quizQuestions,
+  type TrafficSign,
+} from "@/data/trafficSigns";
+import { learningService } from "@/services/learning.service";
+
+/** One runnable question, with the sign plate the API embedded (or resolved
+ *  from the bundled catalogue on the offline fallback). */
+type QuizItem = {
+  id: string;
+  signId: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+  sign: TrafficSign | null;
+};
 
 /**
  * Fisher–Yates. The RN screen used `sort(() => Math.random() - 0.5)`, which is
@@ -16,20 +33,30 @@ import { findSignById, quizQuestions, type QuizQuestion } from "@/data/trafficSi
  * biased and some orders are unreachable. Same intent (a fresh order per
  * attempt), done properly.
  *
- * Skipped during SSR so the server and the first client render agree on the
- * question order. The route is only ever mounted in the browser (RoleGate
- * renders null on the server), but the guard makes that a local decision
- * rather than a hidden dependency on the parent.
+ * Only ever runs in the browser: the question list arrives through a
+ * useEffect fetch, so the server and the first client render both show the
+ * loading state and never disagree on an order.
  */
-function shuffledQuestions(): QuizQuestion[] {
-  if (typeof window === "undefined") return quizQuestions;
-
-  const copy = [...quizQuestions];
+function shuffledQuestions(source: QuizItem[]): QuizItem[] {
+  const copy = [...source];
   for (let i = copy.length - 1; i > 0; i -= 1) {
     const j = Math.floor(Math.random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+/** Bundled catalogue rows, resolved against the bundled signs — the copy that
+ *  runs when the API cannot be reached. */
+function bundledQuestions(): QuizItem[] {
+  return quizQuestions.map((question) => ({
+    id: question.id,
+    signId: question.signId,
+    question: question.question,
+    options: question.options,
+    correctIndex: question.correctIndex,
+    sign: findSignById(question.signId) ?? null,
+  }));
 }
 
 /** Tiered result copy from QuizScreen — the emoji and wording are the source's. */
@@ -53,18 +80,49 @@ function resultFor(pct: number): { emoji: string; message: string } {
 }
 
 export default function QuizPage() {
-  const [questions, setQuestions] = useState<QuizQuestion[]>(shuffledQuestions);
+  // null while the live question set loads; the bundled copy takes over on
+  // failure, and an empty live set (all archived) stays empty on purpose.
+  const [questions, setQuestions] = useState<QuizItem[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [hasAnswered, setHasAnswered] = useState(false);
   const [score, setScore] = useState(0);
   const [isFinished, setIsFinished] = useState(false);
 
-  const currentQuestion = questions[currentIndex];
-  const sign = findSignById(currentQuestion.signId);
+  useEffect(() => {
+    let cancelled = false;
+    learningService
+      .listActiveQuiz()
+      .then((rows) => {
+        if (cancelled) return;
+        setQuestions(
+          shuffledQuestions(
+            rows.map((row) => ({
+              id: row.id,
+              signId: row.signId,
+              question: row.question,
+              options: row.options,
+              correctIndex: row.correctIndex,
+              sign: row.sign ?? null,
+            }))
+          )
+        );
+      })
+      .catch(() => {
+        // Offline or API down: play the bundled quiz instead.
+        if (!cancelled) setQuestions(shuffledQuestions(bundledQuestions()));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const currentQuestion = questions && currentIndex < questions.length ? questions[currentIndex] : null;
+  const total = questions?.length ?? 0;
+  const pct = total > 0 ? Math.round((score / total) * 100) : 0;
 
   function handleSelectOption(index: number) {
-    if (hasAnswered) return;
+    if (!currentQuestion || hasAnswered) return;
     setSelectedOption(index);
     setHasAnswered(true);
     if (index === currentQuestion.correctIndex) {
@@ -73,6 +131,7 @@ export default function QuizPage() {
   }
 
   function handleNext() {
+    if (!questions) return;
     if (currentIndex + 1 >= questions.length) {
       setIsFinished(true);
       return;
@@ -83,9 +142,11 @@ export default function QuizPage() {
   }
 
   // Retake draws a new order as well as resetting the run, so a driver who
-  // memorised the sequence can't coast through a second attempt.
+  // memorised the sequence can't coast through a second attempt. Same set —
+  // the questions were already loaded (live or bundled).
   function handleRestart() {
-    setQuestions(shuffledQuestions());
+    if (!questions) return;
+    setQuestions(shuffledQuestions(questions));
     setCurrentIndex(0);
     setSelectedOption(null);
     setHasAnswered(false);
@@ -93,21 +154,40 @@ export default function QuizPage() {
     setIsFinished(false);
   }
 
-  const total = questions.length;
-  const pct = Math.round((score / total) * 100);
-
   return (
     <>
       <AppBar title={isFinished ? "Quiz Results" : "Sign Quiz"} backHref="/home/learning" />
 
-      {isFinished ? (
+      {!questions ? (
+        /* Live fetch in flight (usually a blink; longer if the free-tier API
+           is cold-starting). Breathe blocks keep the layout calm meanwhile. */
+        <PageBody className="pt-5">
+          <div aria-hidden className="flex flex-col gap-3">
+            <div className="breathe mx-auto h-[90px] w-[90px] rounded-2xl bg-surface-sunken" />
+            <div className="breathe mx-auto h-4 w-3/4 rounded-full bg-surface-sunken [animation-delay:120ms]" />
+            <div className="breathe h-12 rounded-[10px] bg-surface-sunken [animation-delay:200ms]" />
+            <div className="breathe h-12 rounded-[10px] bg-surface-sunken [animation-delay:280ms]" />
+            <div className="breathe h-12 rounded-[10px] bg-surface-sunken [animation-delay:360ms]" />
+            <div className="breathe h-12 rounded-[10px] bg-surface-sunken [animation-delay:440ms]" />
+          </div>
+        </PageBody>
+      ) : total === 0 ? (
+        <PageBody className="pt-5">
+          <EmptyState
+            title="No quiz questions right now"
+            action={{ label: "Back to Learning Center", href: "/home/learning" }}
+          >
+            The quiz is being updated — review the road signs while you wait.
+          </EmptyState>
+        </PageBody>
+      ) : isFinished ? (
         <QuizResults
           score={score}
           total={total}
           pct={pct}
           onRetake={handleRestart}
         />
-      ) : (
+      ) : currentQuestion ? (
         <>
           {/* RN's progressRow + progressTrack, collapsed into one band. */}
           <div className="border-b border-hairline bg-surface px-5 pb-3">
@@ -140,14 +220,14 @@ export default function QuizPage() {
               key={currentQuestion.id}
               className="rise mb-4 grid h-[90px] place-items-center"
             >
-              {sign ? (
+              {currentQuestion.sign ? (
                 <SignShape
-                  shape={sign.shape}
-                  color={sign.color}
+                  shape={currentQuestion.sign.shape}
+                  color={currentQuestion.sign.color}
                   size={64}
-                  glyph={sign.glyph}
-                  prohibited={sign.prohibited}
-                  solid={sign.solid}
+                  glyph={currentQuestion.sign.glyph}
+                  prohibited={currentQuestion.sign.prohibited}
+                  solid={currentQuestion.sign.solid}
                 />
               ) : null}
             </div>
@@ -213,7 +293,7 @@ export default function QuizPage() {
             ) : null}
           </PageBody>
         </>
-      )}
+      ) : null}
 
       <BottomNav />
     </>

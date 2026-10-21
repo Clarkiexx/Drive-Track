@@ -351,3 +351,67 @@ model KnowledgeBase {
 
   @@map("knowledge_base")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Learning Center (road-sign catalogue + quiz) managed by admins.
+//
+// As with knowledge_base above, the TABLES are created at RUNTIME by
+// src/repositories/learningRepository.js (`CREATE TABLE IF NOT EXISTS`),
+// never by `prisma db push` / `migrate`: the live Neon database has known
+// unrelated drift and migration tooling must not touch it. These models are
+// appended only so `npx prisma generate` emits types — raw SQL owns the
+// schema, Prisma reads/writes rows.
+//
+//  - learning_signs: one row per sign; `id` is a stable slug (seeded signs
+//    reuse the bundled catalogue ids, admin-created signs get a slug of
+//    their name). The driver Learning Center lists active rows in
+//    sort_order; nothing is ever hard-deleted — `is_active` retires a sign.
+//  - learning_quiz_questions: `options` is a 4-item text array;
+//    `correct_index` is 0-based into it; `sign_id` references
+//    learning_signs.id (FK declared in the runtime DDL).
+//  - learning_educational_questions: the "Educational" practice section —
+//    text-only questions (no sign); `options` is a 3- or 4-item text array,
+//    `correct_index` is 0-based into it.
+model LearningSign {
+  id         String   @id
+  name       String
+  category   String
+  shape      String
+  color      String
+  meaning    String
+  glyph      String
+  prohibited Boolean  @default(false)
+  solid      Boolean  @default(false)
+  sortOrder  Int      @default(0) @map("sort_order")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("learning_signs")
+}
+
+model LearningQuizQuestion {
+  id           String   @id
+  signId       String   @map("sign_id")
+  question     String
+  options      String[]
+  correctIndex Int      @map("correct_index")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("learning_quiz_questions")
+}
+
+model LearningEducationalQuestion {
+  id           String   @id
+  question     String
+  options      String[]
+  correctIndex Int      @map("correct_index")
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("learning_educational_questions")
+}

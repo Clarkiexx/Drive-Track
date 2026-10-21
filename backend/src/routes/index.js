@@ -9,6 +9,9 @@ const dashboardRoutes = require('./dashboardRoutes');
 const chatbotRoutes = require('./chatbotRoutes');
 const auditLogRoutes = require('./auditLogRoutes');
 const paymentRoutes = require('./paymentRoutes');
+const learningRoutes = require('./learningRoutes');
+const mediaRoutes = require('./mediaRoutes');
+const geocodeRoutes = require('./geocodeRoutes');
 
 const router = express.Router();
 
@@ -22,5 +25,8 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/audit-logs', auditLogRoutes);
 router.use('/payments', paymentRoutes);
+router.use('/learning', learningRoutes);
+router.use('/media', mediaRoutes);
+router.use('/geocode', geocodeRoutes);
 
 module.exports = router;

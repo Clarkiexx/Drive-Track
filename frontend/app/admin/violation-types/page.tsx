@@ -6,6 +6,7 @@ import { RotateCw, Tags } from "lucide-react";
 import EmptyState from "@/components/common/EmptyState";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
+import StatusFilterSelect, { type StatusFilterOption } from "@/components/common/StatusFilterSelect";
 import { getApiErrorMessage } from "@/lib/axios";
 import {
   formatPenaltyRange,
@@ -19,6 +20,14 @@ const CATEGORY_LABELS: Record<ViolationCategory, string> = {
   non_moving: "Non-moving",
 };
 
+type StatusFilter = "all" | "active" | "inactive";
+
+const STATUS_FILTER_OPTIONS: readonly StatusFilterOption<StatusFilter>[] = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
+];
+
 function toNumber(value: string | number | null | undefined): number {
   const parsed = typeof value === "number" ? value : Number.parseFloat(value ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
@@ -26,7 +35,7 @@ function toNumber(value: string | number | null | undefined): number {
 
 export default function AdminViolationTypesPage() {
   const [types, setTypes] = useState<ViolationTypeRecord[]>([]);
-  const [showInactive, setShowInactive] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -75,7 +84,11 @@ export default function AdminViolationTypesPage() {
     }
   }
 
-  const visible = showInactive ? types : types.filter((t) => t.isActive ?? true);
+  const visible = types.filter((t) => {
+    if (statusFilter === "all") return true;
+    const isActive = t.isActive ?? true;
+    return statusFilter === "active" ? isActive : !isActive;
+  });
   const activeCount = types.filter((t) => t.isActive ?? true).length;
 
   return (
@@ -144,15 +157,11 @@ export default function AdminViolationTypesPage() {
           <p className="ml-auto shrink-0 text-[11.5px] leading-none text-console-muted">
             {activeCount} active of {types.length}
           </p>
-          <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[12px] font-semibold text-console-muted">
-            <input
-              type="checkbox"
-              checked={showInactive}
-              onChange={(event) => setShowInactive(event.target.checked)}
-              className="size-3.5 accent-brand-600"
-            />
-            Show inactive
-          </label>
+          <StatusFilterSelect
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={STATUS_FILTER_OPTIONS}
+          />
         </header>
 
         {isLoading ? (
@@ -172,10 +181,20 @@ export default function AdminViolationTypesPage() {
             </NoticeBox>
           </div>
         ) : visible.length === 0 ? (
-          <EmptyState title="No violation types found">
-            {showInactive
+          <EmptyState
+            title={
+              statusFilter === "all"
+                ? "No violation types found"
+                : statusFilter === "active"
+                  ? "No active violation types"
+                  : "No inactive violation types"
+            }
+          >
+            {statusFilter === "all"
               ? "The catalogue is empty — add the first offence to get started."
-              : "No active violation types. Toggle “Show inactive” to review retired entries."}
+              : statusFilter === "active"
+                ? "Nothing is active right now — switch the filter to review retired entries."
+                : "Nothing has been retired — every type is currently active."}
           </EmptyState>
         ) : (
           <div className="overflow-x-auto">

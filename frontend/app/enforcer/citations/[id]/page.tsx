@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
+import CitationMap from "@/components/common/CitationMap";
 import {
   EvidenceStrip,
   FineBox,
@@ -325,6 +326,13 @@ function ReceiptCard({ citation, justFiled }: ReceiptCardProps) {
           stay plain, matching the driver-side receipt. */}
       <InfoRow label="Date & Time" value={formatDateTimeManila(citation.occurredAt)} icon="calendar" />
       <InfoRow label="Location" value={citation.placeOfViolation} icon="map" />
+      <CitationMap
+        latitude={citation.latitude}
+        longitude={citation.longitude}
+        place={citation.placeOfViolation}
+        height={220}
+        className="mt-2.5"
+      />
       {citation.plateNumber ? (
         <InfoRow label="Plate Number" value={citation.plateNumber} />
       ) : null}

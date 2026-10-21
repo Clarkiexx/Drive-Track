@@ -34,6 +34,7 @@ import {
   type CitationCreatePayload,
 } from "@/services/citation.service";
 import { driverService, type DriverRecord } from "@/services/driver.service";
+import { geocodeService } from "@/services/geocode.service";
 import {
   formatPenaltyRange,
   violationTypeService,
@@ -178,6 +179,17 @@ function IssueCitationWizard() {
   // Step 4
   const { location, error: locationError, isLocating, capture } = useGeolocation();
   const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+  /**
+   * Reverse-geocoding result for one specific fix. Kept together with the
+   * coordinates it describes so a slow response can never label a newer
+   * position: the UI only reads it while it matches the current fix.
+   */
+  const [placeLookup, setPlaceLookup] = useState<{
+    latitude: number;
+    longitude: number;
+    placeName: string | null;
+    error: string;
+  } | null>(null);
   const [driverUnderProtest, setDriverUnderProtest] = useState<boolean | null>(null);
 
   const [stepError, setStepError] = useState("");
@@ -286,6 +298,68 @@ function IssueCitationWizard() {
   useEffect(() => {
     if (step === 4 && !location) capture();
   }, [step, location, capture]);
+
+  // Stable primitives so the lookup effect reruns only for a genuinely new fix,
+  // not for every render's fresh `location` object.
+  const fixLatitude = location?.latitude ?? null;
+  const fixLongitude = location?.longitude ?? null;
+
+  const hasFix = fixLatitude !== null && fixLongitude !== null;
+  const isPlaceLookupCurrent =
+    hasFix &&
+    placeLookup !== null &&
+    placeLookup.latitude === fixLatitude &&
+    placeLookup.longitude === fixLongitude;
+
+  /** Derived, so a pending/all-stale lookup reads as "still detecting". */
+  const isResolvingPlace = hasFix && !isPlaceLookupCurrent;
+  const detectedPlace = isPlaceLookupCurrent ? placeLookup.placeName : null;
+  const placeLookupError = isPlaceLookupCurrent ? placeLookup.error : "";
+
+  /**
+   * Reverse geocoding — one request per location fix, aborted when the fix
+   * changes or the wizard unmounts. A failure is deliberately non-blocking:
+   * the manual Place of Violation field and submission do not depend on it.
+   */
+  useEffect(() => {
+    if (fixLatitude === null || fixLongitude === null) return;
+
+    const controller = new AbortController();
+    let active = true;
+
+    geocodeService
+      .reverseGeocode(fixLatitude, fixLongitude, { signal: controller.signal })
+      .then((result) => {
+        if (!active) return;
+
+        const label = result.placeName ?? result.displayName ?? null;
+        setPlaceLookup({
+          latitude: fixLatitude,
+          longitude: fixLongitude,
+          placeName: label,
+          error: "",
+        });
+        // Auto-fill only an empty field. Manual wording is never replaced —
+        // the officer can still apply the detected place explicitly from GpsBox.
+        if (label) {
+          setPlaceOfViolation((current) => (current.trim() ? current : label));
+        }
+      })
+      .catch((lookupError: unknown) => {
+        if (!active || controller.signal.aborted) return;
+        setPlaceLookup({
+          latitude: fixLatitude,
+          longitude: fixLongitude,
+          placeName: null,
+          error: getApiErrorMessage(lookupError, "Couldn't detect the place name."),
+        });
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [fixLatitude, fixLongitude]);
 
   const toggleViolation = useCallback((id: number) => {
     setSelectedViolationIds((prev) =>
@@ -679,6 +753,15 @@ function IssueCitationWizard() {
             locationError={locationError}
             isLocating={isLocating}
             onRetryLocation={capture}
+            placeName={detectedPlace}
+            isResolvingPlace={isResolvingPlace}
+            placeError={placeLookupError}
+            onUsePlace={() => {
+              if (detectedPlace) setPlaceOfViolation(detectedPlace);
+            }}
+            isPlaceApplied={
+              detectedPlace !== null && placeOfViolation.trim() === detectedPlace.trim()
+            }
             photos={photos}
             onCapture={() => cameraInputRef.current?.click()}
             onPick={() => galleryInputRef.current?.click()}
@@ -1057,6 +1140,12 @@ type StepDocumentationProps = {
   locationError: string | null;
   isLocating: boolean;
   onRetryLocation: () => void;
+  /** Reverse-geocoded place for the captured fix, when available. */
+  placeName: string | null;
+  isResolvingPlace: boolean;
+  placeError: string;
+  onUsePlace: () => void;
+  isPlaceApplied: boolean;
   photos: PickedPhoto[];
   onCapture: () => void;
   onPick: () => void;
@@ -1078,6 +1167,11 @@ function StepDocumentation({
   locationError,
   isLocating,
   onRetryLocation,
+  placeName,
+  isResolvingPlace,
+  placeError,
+  onUsePlace,
+  isPlaceApplied,
   photos,
   onCapture,
   onPick,
@@ -1094,6 +1188,11 @@ function StepDocumentation({
         error={locationError}
         onRetry={onRetryLocation}
         isLocating={isLocating}
+        placeName={placeName}
+        isResolvingPlace={isResolvingPlace}
+        placeError={placeError}
+        onUsePlace={onUsePlace}
+        isPlaceApplied={isPlaceApplied}
       />
 
       <div className="mt-4">

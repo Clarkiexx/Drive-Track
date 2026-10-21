@@ -14,8 +14,7 @@ import {
   authService,
   type AuthSession,
   type AuthUser,
-  type DriverLoginInput,
-  type StaffLoginInput,
+  type UnifiedLoginInput,
 } from "@/services/auth.service";
 import { homeForRole, type Role } from "@/constants/roles";
 import {
@@ -58,12 +57,14 @@ export interface AuthContextValue {
   /** True while a driver still owes a password change (JWT flag included). */
   mustChangePassword: boolean;
   isAuthenticated: boolean;
-  login: (role: Role, credentials: DriverLoginInput | StaffLoginInput) => Promise<AuthSession>;
+  login: (credentials: UnifiedLoginInput) => Promise<AuthSession>;
   logout: () => void;
   /** Clears the forced-change flag locally (call after changePassword). */
   clearMustChangePassword: () => void;
   /** Applies a fresh token issued by POST /auth/driver/change-password. */
   applyToken: (token: string) => void;
+  /** Merges a partial profile update into the live session + storage. */
+  applyProfilePatch: (patch: Partial<AuthUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -153,9 +154,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const persistSession = useCallback((session: AuthSession) => {
-    // The login role is explicit — the session lands ONLY in that role's
-    // slots, so signing in as an enforcer here cannot overwrite a driver
-    // session living in another tab.
+    // The role is whatever the backend detected for these credentials — the
+    // session lands ONLY in that role's slots, so signing in as an enforcer
+    // here cannot overwrite a driver session living in another tab.
     const role = session.user.role;
     persistToken(session.token, role);
     persistUser(role, session.user);
@@ -164,8 +165,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (role: Role, credentials: DriverLoginInput | StaffLoginInput): Promise<AuthSession> => {
-      const session = await authService.login(role, credentials);
+    async (credentials: UnifiedLoginInput): Promise<AuthSession> => {
+      // The backend tells us which account signed in; everything below keys
+      // off the DETECTED role rather than anything the caller said.
+      const session = await authService.login(credentials);
       persistSession(session);
       // A driver whose mustChangePassword flag is set is sent to the change
       // screen INSTEAD of their role home. The backend's auth middleware 403s
@@ -191,15 +194,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // common case), falling back to this tab's route prefix.
     const role = user?.role ?? currentRole();
     clearSession(role);
-    setUser(null);
-    setToken(null);
-    router.replace("/login");
-  }, [router, user?.role]);
+
+    // Use a full document navigation, not router.replace(): the protected
+    // tree's RoleGate also reacts to the session becoming null and would race
+    // us with `/login?next=/admin/...`, which re-dresses the sign-in card as
+    // the admin console. A hard replace lands on the plain `/login` and also
+    // throws away every in-memory trace of the signed-out session.
+    window.location.replace("/login");
+  }, [user?.role]);
 
   const clearMustChangePassword = useCallback(() => {
     setUser((current) => {
       if (!current || !current.mustChangePassword) return current;
       const next = { ...current, mustChangePassword: false };
+      persistUser(current.role, next);
+      return next;
+    });
+  }, []);
+
+  const applyProfilePatch = useCallback((patch: Partial<AuthUser>) => {
+    // Used after PATCH /drivers/me and /drivers/me/photo: the backend owns the
+    // saved record, so merge its response into the session and re-persist the
+    // role's profile blob — a reload must not resurrect the old name/avatar.
+    setUser((current) => {
+      if (!current) return current;
+      const next = { ...current, ...patch };
       persistUser(current.role, next);
       return next;
     });
@@ -234,8 +253,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       clearMustChangePassword,
       applyToken,
+      applyProfilePatch,
     }),
-    [user, token, isLoading, login, logout, clearMustChangePassword, applyToken]
+    [
+      user,
+      token,
+      isLoading,
+      login,
+      logout,
+      clearMustChangePassword,
+      applyToken,
+      applyProfilePatch,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

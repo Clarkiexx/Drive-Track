@@ -1,28 +1,24 @@
 "use client";
 
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { CreditCard, LogOut, MapPin, Phone, type LucideIcon } from "lucide-react";
 
 import { useAuth } from "@/context/AuthContext";
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
+import FormField from "@/components/common/FormField";
+import NoticeBox from "@/components/common/NoticeBox";
 import PageBody from "@/components/common/PageBody";
+import { getApiErrorMessage } from "@/lib/axios";
+import { getMediaUrl } from "@/lib/media";
+import {
+  ACCEPTED_IMAGE_TYPES,
+  IMAGE_REJECTION_MESSAGE,
+  rejectImage,
+} from "@/lib/uploadLimits";
+import { driverService } from "@/services/driver.service";
 import type { VerificationStatus } from "@/constants/violations";
-import type { AuthUser } from "@/services/auth.service";
-
-/**
- * The four fields ProfileScreen reads off the stored driver that AuthUser does
- * not carry yet: the licence number, the two optional contact rows and the
- * reason CTMO gave when it flagged or revoked an account. They are read
- * defensively so the rows simply disappear (rather than printing blanks) if the
- * shape ever lacks them, and so widening AuthUser lights the screen up without
- * touching this file.
- */
-type ProfileDetails = {
-  licenseNumber?: string | null;
-  address?: string | null;
-  contactNumber?: string | null;
-  statusReason?: string | null;
-};
 
 type StatusMeta = {
   label: string;
@@ -32,15 +28,31 @@ type StatusMeta = {
 };
 
 export default function ProfilePage() {
-  const { user, logout } = useAuth();
+  const { user, logout, applyProfilePatch } = useAuth();
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  const details = (user as (AuthUser & ProfileDetails) | null) ?? null;
-  const firstName = user?.firstName ?? "";
-  const lastName = user?.lastName ?? "";
+  // Edit form. State is seeded from the session on "Edit personal details"
+  // rather than at mount: AuthContext restores the session after hydration,
+  // so initialising here would capture the empty pre-restore values.
+  const [isEditing, setIsEditing] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [middleInitial, setMiddleInitial] = useState("");
+  const [middleInitialTouched, setMiddleInitialTouched] = useState(false);
+  const [lastName, setLastName] = useState("");
+  const [address, setAddress] = useState("");
+  const [contactNumber, setContactNumber] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
+  const currentFirstName = user?.firstName ?? "";
+  const currentLastName = user?.lastName ?? "";
   const status = user?.verificationStatus ?? "pending";
+  const photoUrl = user?.profilePhotoPath ? getMediaUrl(user.profilePhotoPath) : "";
 
   // "MV" for Maria Villanueva — RN builds it from the two initials.
-  const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase();
+  const initials = `${currentFirstName.charAt(0)}${currentLastName.charAt(0)}`.toUpperCase();
 
   /**
    * RN's statusMeta map, verbatim in copy. Fills come from the token set:
@@ -58,12 +70,12 @@ export default function ProfilePage() {
     flagged: {
       label: "Flagged for Review",
       chip: "bg-ember-soft text-signal-hold",
-      hint: details?.statusReason || "Your account was flagged. Please contact CTMO.",
+      hint: user?.statusReason || "Your account was flagged. Please contact CTMO.",
     },
     revoked: {
       label: "Revoked",
       chip: "bg-danger-soft text-signal-stop",
-      hint: details?.statusReason || "Your account was revoked. Please contact CTMO.",
+      hint: user?.statusReason || "Your account was revoked. Please contact CTMO.",
     },
     suspended: {
       label: "Suspended",
@@ -80,18 +92,140 @@ export default function ProfilePage() {
     hint: null,
   };
 
+  function startEditing() {
+    // Re-seed from the latest saved record every time the form opens.
+    setFirstName(user?.firstName ?? "");
+    setMiddleInitial(user?.middleInitial ?? "");
+    setMiddleInitialTouched(false);
+    setLastName(user?.lastName ?? "");
+    setAddress(user?.address ?? "");
+    setContactNumber(user?.contactNumber ?? "");
+    setEditError("");
+    setIsEditing(true);
+  }
+
+  function cancelEditing() {
+    setEditError("");
+    setIsEditing(false);
+  }
+
+  async function handleSave() {
+    setEditError("");
+    if (!firstName.trim() || !lastName.trim()) {
+      setEditError("First name and last name are required.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      // Sessions restored before middleInitial joined AuthUser cannot know the
+      // saved value, so omit it unless the driver actually edited the field —
+      // otherwise saving an unrelated change would silently clear their M.I.
+      const middleInitialPatch =
+        user?.middleInitial !== undefined || middleInitialTouched
+          ? { middleInitial: middleInitial.trim() || null }
+          : {};
+
+      const updated = await driverService.updateMyProfile({
+        firstName: firstName.trim(),
+        ...middleInitialPatch,
+        lastName: lastName.trim(),
+        address: address.trim() || null,
+        contactNumber: contactNumber.trim() || null,
+      });
+
+      // The response is the saved record — patch the session with it rather
+      // than echoing the form, so the rows show exactly what the server stored.
+      applyProfilePatch({
+        firstName: updated.firstName,
+        middleInitial: updated.middleInitial ?? null,
+        lastName: updated.lastName,
+        address: updated.address ?? null,
+        contactNumber: updated.contactNumber ?? null,
+      });
+      setIsEditing(false);
+      toast.success("Profile updated. Your personal details have been saved.");
+    } catch (error) {
+      setEditError(getApiErrorMessage(error, "Unable to save changes. Please try again."));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handlePhoto(file: File | undefined) {
+    if (!file) return;
+
+    // The server rejects unsupported types and >8MB files; checking here keeps
+    // the failure immediate and reuses the same wording as driver registration.
+    const rejection = rejectImage(file);
+    if (rejection) {
+      toast.error(IMAGE_REJECTION_MESSAGE[rejection]);
+      return;
+    }
+
+    setIsUploadingPhoto(true);
+    try {
+      const updated = await driverService.uploadMyPhoto(file);
+      applyProfilePatch({ profilePhotoPath: updated.profilePhotoPath ?? null });
+      toast.success("Profile photo updated. Your new picture is now showing.");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "Unable to upload the photo. Please try again."));
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  }
+
   return (
     <>
       <AppBar title="My Profile" backHref="/home" />
 
       <PageBody>
         <div className="flex flex-col items-center pt-6">
-          <span className="grid size-[72px] place-items-center rounded-full bg-brand-500 font-display text-[24px] font-bold text-white ring-[3px] ring-surface">
-            {initials}
-          </span>
+          {photoUrl ? (
+            // Backend-served avatar: the same plain <img> pattern as citation
+            // evidence (the Next image optimiser has no route to the API host).
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={photoUrl}
+              alt="Profile picture"
+              className="size-[72px] rounded-full object-cover ring-[3px] ring-surface"
+            />
+          ) : (
+            <span className="grid size-[72px] place-items-center rounded-full bg-brand-500 font-display text-[24px] font-bold text-white ring-[3px] ring-surface">
+              {initials}
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            disabled={isUploadingPhoto}
+            className="mt-2 text-[13px] font-semibold text-brand-500 underline-offset-2 hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isUploadingPhoto
+              ? "Uploading…"
+              : photoUrl
+                ? "Change profile picture"
+                : "Add profile picture"}
+          </button>
+
+          <input
+            ref={fileInput}
+            type="file"
+            accept={ACCEPTED_IMAGE_TYPES}
+            disabled={isUploadingPhoto}
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              // Clear immediately so re-picking the same file still fires
+              // onChange (e.g. after a client-side rejection).
+              event.target.value = "";
+              void handlePhoto(file);
+            }}
+          />
 
           <p className="font-display mt-2.5 text-center text-[17px] font-bold text-ink">
-            {user ? `${firstName} ${lastName}` : ""}
+            {user ? `${currentFirstName} ${currentLastName}` : ""}
           </p>
 
           <span className={`mt-2 rounded-full px-3 py-[5px] text-[12px] font-bold ${meta.chip}`}>
@@ -106,13 +240,94 @@ export default function ProfilePage() {
         </div>
 
         <section className="mt-6 flex flex-col gap-3 rounded-[14px] bg-surface p-[18px]">
-          <InfoRow Icon={CreditCard} label="License Number" value={details?.licenseNumber || "—"} />
-          {details?.address ? (
-            <InfoRow Icon={MapPin} label="Address" value={details.address} />
+          <InfoRow Icon={CreditCard} label="License Number" value={user?.licenseNumber || "—"} />
+          {user?.address ? <InfoRow Icon={MapPin} label="Address" value={user.address} /> : null}
+          {user?.contactNumber ? (
+            <InfoRow Icon={Phone} label="Contact Number" value={user.contactNumber} />
           ) : null}
-          {details?.contactNumber ? (
-            <InfoRow Icon={Phone} label="Contact Number" value={details.contactNumber} />
-          ) : null}
+
+          {!isEditing ? (
+            <button
+              type="button"
+              onClick={startEditing}
+              className="mt-2 rounded-[10px] border border-hairline bg-surface py-[11px] text-[13px] font-semibold text-ink transition-colors hover:bg-surface-sunken"
+            >
+              Edit personal details
+            </button>
+          ) : (
+            <div className="mt-2">
+              <div className="flex gap-2.5">
+                <FormField
+                  className="flex-[2]"
+                  label="First Name"
+                  required
+                  autoComplete="given-name"
+                  value={firstName}
+                  onChange={(event) => setFirstName(event.target.value)}
+                />
+                <FormField
+                  className="flex-1"
+                  label="M.I."
+                  maxLength={5}
+                  value={middleInitial}
+                  onChange={(event) => {
+                    setMiddleInitial(event.target.value.toUpperCase());
+                    setMiddleInitialTouched(true);
+                  }}
+                />
+              </div>
+
+              <FormField
+                className="mt-3.5"
+                label="Last Name"
+                required
+                autoComplete="family-name"
+                value={lastName}
+                onChange={(event) => setLastName(event.target.value)}
+              />
+
+              <FormField
+                className="mt-3.5"
+                label="Address"
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+              />
+
+              <FormField
+                className="mt-3.5"
+                label="Contact Number"
+                type="tel"
+                inputMode="tel"
+                value={contactNumber}
+                onChange={(event) => setContactNumber(event.target.value)}
+              />
+
+              {editError ? (
+                <NoticeBox className="mt-3.5" tone="danger">
+                  {editError}
+                </NoticeBox>
+              ) : null}
+
+              <div className="mt-3.5 flex gap-2.5">
+                <button
+                  type="button"
+                  onClick={cancelEditing}
+                  disabled={isSaving}
+                  className="flex-1 rounded-[10px] border border-hairline bg-surface py-[11px] text-[13px] font-semibold text-ink transition-colors hover:bg-surface-sunken disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="flex-1 rounded-[10px] bg-brand-500 py-[11px] text-[13px] font-semibold text-white transition-colors hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSaving ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         <button

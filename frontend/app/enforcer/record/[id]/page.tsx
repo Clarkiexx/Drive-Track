@@ -5,6 +5,7 @@ import { CalendarDays, CreditCard, MapPin, RotateCw, TriangleAlert } from "lucid
 
 import AppBar from "@/components/common/AppBar";
 import BottomNav from "@/components/common/BottomNav";
+import DriverAvatar from "@/components/common/DriverAvatar";
 import EmptyState from "@/components/common/EmptyState";
 import NoticeBox from "@/components/common/NoticeBox";
 import PageBody from "@/components/common/PageBody";
@@ -179,9 +180,12 @@ type ProfileCardProps = {
 function ProfileCard({ driver }: ProfileCardProps) {
   return (
     <section className="rise mt-5 rounded-[14px] border border-hairline bg-surface p-5 shadow-card">
-      <span
-        aria-hidden
-        className="mb-3 block size-11 rounded-full bg-surface-sunken ring-1 ring-hairline ring-inset"
+      <DriverAvatar
+        firstName={driver.firstName}
+        lastName={driver.lastName}
+        photoPath={driver.profilePhotoPath}
+        size="lg"
+        className="mb-3"
       />
 
       <h2 className="font-display text-[17px] font-semibold tracking-tight text-ink">

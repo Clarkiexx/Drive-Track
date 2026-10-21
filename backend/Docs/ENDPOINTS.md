@@ -20,6 +20,7 @@
 
 | Method | Path | Auth | Roles | Notes |
 | --- | --- | --- | --- | --- |
+| POST | `/api/v1/auth/login` | Public | — | Unified web login — `identifier` (driver full name **or** staff username) + `password`; response adds `role` + the matching per-role payload |
 | POST | `/api/v1/auth/driver/register` | Public | — | multipart field `licensePhoto` (optional) |
 | POST | `/api/v1/auth/driver/login` | Public | — | `fullName` + `password` |
 | POST | `/api/v1/auth/driver/change-password` | Bearer | driver | Only route reachable while `mustChangePassword` is true |
@@ -42,6 +43,12 @@
 | PATCH | `/api/v1/citations/:id/cancel` | Bearer + role | admin | |
 | PATCH | `/api/v1/citations/:id/protest` | Bearer + role | admin | |
 | GET | `/api/v1/citations/:id` | Bearer + role | driver, enforcer, admin | Catch-all `/:id` — must stay last |
+
+## Geocoding — `src/routes/geocodeRoutes.js`
+
+| Method | Path | Auth | Roles | Notes |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/geocode/reverse` | Bearer + role | enforcer, admin | `lat`/`lng` query; cached Nominatim/Photon reverse lookup returning `placeName`, `displayName`, `source`, `cached` |
 
 ## Drivers — `src/routes/driverRoutes.js` (router-level `authenticate`)
 
@@ -77,6 +84,23 @@
 | PATCH | `/api/v1/violation-types/:id` | Bearer + role | admin | Partial update — all fields optional |
 | PATCH | `/api/v1/violation-types/:id/status` | Bearer + role | admin | |
 
+## Learning Center — `src/routes/learningRoutes.js` (router-level `authenticate`)
+
+| Method | Path | Auth | Roles | Notes |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/learning/signs` | Bearer | driver, enforcer, admin | `?active=true` narrows to the rows the driver app shows |
+| POST | `/api/v1/learning/signs` | Bearer + role | admin | Id is the slugified name (`no-left-turn-2` on collision) |
+| PATCH | `/api/v1/learning/signs/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/signs/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) — nothing is hard-deleted |
+| GET | `/api/v1/learning/quiz` | Bearer | driver, enforcer, admin | Each row carries the embedded `sign`; `?active=true` also hides rows whose sign is archived |
+| POST | `/api/v1/learning/quiz` | Bearer + role | admin | |
+| PATCH | `/api/v1/learning/quiz/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/quiz/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) |
+| GET | `/api/v1/learning/educational` | Bearer | driver, enforcer, admin | The "Educational" study set (answers included); `?active=true` narrows to active rows |
+| POST | `/api/v1/learning/educational` | Bearer + role | admin | 3–4 answer options; `correctIndex` must point at a filled option (422 otherwise) |
+| PATCH | `/api/v1/learning/educational/:id` | Bearer + role | admin | Partial update — all fields optional |
+| PATCH | `/api/v1/learning/educational/:id/status` | Bearer + role | admin | Archive/restore (`isActive`) — nothing is hard-deleted |
+
 ## Notifications — `src/routes/notificationRoutes.js` (router-level `authenticate`)
 
 | Method | Path | Auth | Roles |
@@ -104,6 +128,7 @@
 | POST | `/api/v1/payments/webhook` | Public | — | Xendit callback, authorized by `x-callback-token`, never by JWT |
 | GET | `/api/v1/payments/return` | Public | — | Browser return page; settles nothing |
 | POST | `/api/v1/payments/citations/:id/checkout` | Bearer + role | driver | |
+| GET | `/api/v1/payments/citations/:id/status` | Bearer + role | driver | Reconcile-on-return probe: re-checks the Xendit session and settles if paid |
 
 ## Dashboard — `src/routes/dashboardRoutes.js` (router-level `authenticate` + `allowRoles('admin')`)
 

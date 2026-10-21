@@ -8,6 +8,13 @@ const { success, fail } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 // Prisma-backed as of the lane-C port (no Sequelize left on this require path).
 const { logAdminAction } = require('../services/auditLogService');
+const {
+  uploadLicenseImage,
+  toProtectedLicensePath,
+  uploadAvatarImage,
+  deleteAsset,
+  deleteAvatarByUrl,
+} = require('../services/cloudinaryService');
 
 const SALT_ROUNDS = 10;
 
@@ -27,12 +34,17 @@ function handleValidation(req, res) {
  * clients, since Prisma otherwise serializes them as full ISO timestamps.
  * Prisma Decimal columns keep serializing to strings, same as mysql2 did
  * (only the trailing-zero scale differs — see Docs/NEON_CUTOVER.md).
+ *
+ * licensePhotoPath is stored in Neon as the Cloudinary secure_url (or a
+ * legacy local path) but is always swapped for the admin-only proxy path here,
+ * so the raw URL never reaches a client.
  */
 function toDriverWire(driver) {
   const { passwordHash: _omit, ...rest } = driver;
   if (rest.dateOfBirth) rest.dateOfBirth = toDateOnlyString(rest.dateOfBirth);
   if (rest.expirationDate) rest.expirationDate = toDateOnlyString(rest.expirationDate);
   if (rest.issueDate) rest.issueDate = toDateOnlyString(rest.issueDate);
+  rest.licensePhotoPath = toProtectedLicensePath(rest.licensePhotoPath);
   return rest;
 }
 
@@ -143,6 +155,8 @@ async function getDriver(req, res, next) {
  * directly is an equally trustworthy source as a physical license.
  */
 async function createDriver(req, res, next) {
+  let uploadedLicense = null;
+  let persisted = false;
   try {
     if (!handleValidation(req, res)) return;
 
@@ -185,6 +199,15 @@ async function createDriver(req, res, next) {
     // to actually confirm the record before verifying it.
     const isEnforcerCreated = req.user.role === 'enforcer';
 
+    // Upload after the uniqueness pre-checks so a rejected request leaves no
+    // orphaned Cloudinary asset behind. Neon stores the Cloudinary secure_url;
+    // toDriverWire converts it to the admin-only proxy path for clients.
+    let licensePhotoPath = null;
+    if (req.file) {
+      uploadedLicense = await uploadLicenseImage(req.file.buffer);
+      licensePhotoPath = uploadedLicense.secure_url;
+    }
+
     const driver = await prisma.driver.create({
       data: {
         firstName,
@@ -209,15 +232,21 @@ async function createDriver(req, res, next) {
         passwordHash,
         mustChangePassword: true,
         verificationStatus: isEnforcerCreated ? 'pending' : 'verified',
-        licensePhotoPath: req.file ? `/uploads/licenses/${req.file.filename}` : null,
+        licensePhotoPath,
       },
     });
+
+    persisted = true;
 
     if (req.user.role === 'admin') {
       logAdminAction(req.user.id, 'created_driver', 'driver', driver.driverId, `${firstName} ${lastName} (${licenseNumber})`);
     }
     return success(res, toDriverWire(driver), 'Driver created', 201);
   } catch (err) {
+    // The DB write may fail after the photo was stored — clean up the new asset.
+    if (uploadedLicense && !persisted) {
+      await deleteAsset(uploadedLicense.public_id, { type: 'authenticated' });
+    }
     // Race safety net: the pre-check above can be beaten by a concurrent
     // create — map the username unique violation to the same clear message.
     if (isUniqueViolationOn(err, 'username')) {
@@ -339,12 +368,15 @@ async function updateDriverMe(req, res, next) {
 
 /**
  * PATCH /drivers/me/photo — the signed-in driver uploads or replaces their
- * profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB, stored under
- * /uploads/avatars/ and served publicly like evidence photos). The previous
- * avatar file is removed best-effort; license photos are never touched —
- * they are verification evidence, not display images.
+ * profile avatar (multipart `photo`, jpeg/png/webp ≤ 8MB). The avatar is
+ * stored as a public Cloudinary image in drivetrack/avatars and the secure
+ * URL goes into profilePhotoPath. The previous avatar is removed best-effort
+ * (Cloudinary asset, or a legacy local /uploads/avatars/ file); license photos
+ * are never touched — they are verification evidence, not display images.
  */
 async function updateDriverPhotoMe(req, res, next) {
+  let uploadedAvatar = null;
+  let persisted = false;
   try {
     if (!req.file) return fail(res, 'A photo file is required', 422);
 
@@ -354,19 +386,28 @@ async function updateDriverPhotoMe(req, res, next) {
       : null;
     if (!driver) return fail(res, 'Driver not found', 404);
 
-    const photoPath = `/uploads/avatars/${req.file.filename}`;
+    uploadedAvatar = await uploadAvatarImage(req.file.buffer);
     const previous = driver.profilePhotoPath;
-    if (previous && previous.startsWith('/uploads/avatars/')) {
-      const absolute = path.join(__dirname, '..', '..', previous);
-      fs.promises.unlink(absolute).catch(() => {});
-    }
 
     const updated = await prisma.driver.update({
       where: { driverId },
-      data: { profilePhotoPath: photoPath },
+      data: { profilePhotoPath: uploadedAvatar.secure_url },
     });
+    persisted = true;
+
+    if (previous && previous.startsWith('/uploads/avatars/')) {
+      // Legacy local avatar from before the Cloudinary move.
+      const absolute = path.join(__dirname, '..', '..', previous);
+      fs.promises.unlink(absolute).catch(() => {});
+    } else if (previous) {
+      deleteAvatarByUrl(previous);
+    }
+
     return success(res, toDriverWire(updated), 'Profile photo updated');
   } catch (err) {
+    if (uploadedAvatar && !persisted) {
+      await deleteAsset(uploadedAvatar.public_id);
+    }
     return respondWithMappedError(res, next, err);
   }
 }

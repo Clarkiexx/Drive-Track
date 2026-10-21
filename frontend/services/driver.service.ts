@@ -22,6 +22,7 @@ export interface DriverRecord {
   statusReason?: string | null;
   statusChangedAt?: string | null;
   licensePhotoPath?: string | null;
+  profilePhotoPath?: string | null;
   nationality?: string | null;
   sex?: string | null;
   dateOfBirth?: string | null;
@@ -79,6 +80,15 @@ export interface DriverPayload {
   condition?: string;
 }
 
+/** Editable self-service fields for PATCH /drivers/me (identity stays admin-owned). */
+export interface MyProfilePayload {
+  firstName?: string;
+  middleInitial?: string | null;
+  lastName?: string;
+  address?: string | null;
+  contactNumber?: string | null;
+}
+
 export const driverService = {
   /**
    * GET /drivers — admin's paginated Driver Management list.
@@ -131,6 +141,30 @@ export const driverService = {
   getDriverCitations: async (driverId: number | string): Promise<CitationRecord[]> => {
     const res = await api.get<ApiEnvelope<CitationRecord[]>>(`/drivers/${driverId}/citations`);
     return res.data?.data ?? [];
+  },
+
+  /**
+   * PATCH /drivers/me — the signed-in driver updates their own editable
+   * details. Identity fields (licenseNumber, verification status) stay
+   * admin-owned; the backend rebuilds the login username from the new name.
+   */
+  updateMyProfile: async (payload: MyProfilePayload): Promise<DriverRecord> => {
+    const res = await api.patch<ApiEnvelope<DriverRecord>>("/drivers/me", payload);
+    if (!res.data?.data) throw new Error("Malformed driver response");
+    return res.data.data;
+  },
+
+  /**
+   * PATCH /drivers/me/photo — multipart avatar upload. The field name must be
+   * `photo` (middleware/uploadAvatar.js); the response carries the new
+   * profilePhotoPath so the session can be patched without a re-fetch.
+   */
+  uploadMyPhoto: async (photo: File | Blob): Promise<DriverRecord> => {
+    const form = new FormData();
+    form.append("photo", photo);
+    const res = await api.patch<ApiEnvelope<DriverRecord>>("/drivers/me/photo", form);
+    if (!res.data?.data) throw new Error("Malformed driver response");
+    return res.data.data;
   },
 
   /**

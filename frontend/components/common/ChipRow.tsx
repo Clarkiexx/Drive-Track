@@ -16,6 +16,13 @@ type ChipRowProps = {
    * "outline" is the bordered chip used by the wizard's category filters.
    */
   variant?: "soft" | "outline";
+  /**
+   * Keeps the chips on one swipeable line instead of letting them wrap to a
+   * second row — for strips that could outgrow the phone width (the Learning
+   * Center's category filters). The scrollbar stays hidden; the partly
+   * visible chip at the edge is the affordance.
+   */
+  scrollable?: boolean;
   className?: string;
 };
 
@@ -25,13 +32,18 @@ export default function ChipRow({
   onChange,
   label,
   variant = "soft",
+  scrollable = false,
   className = "",
 }: ChipRowProps) {
   return (
     <div
       role="group"
       aria-label={label}
-      className={`flex flex-wrap gap-2 ${className}`}
+      className={
+        scrollable
+          ? `flex gap-2 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${className}`
+          : `flex flex-wrap gap-2 ${className}`
+      }
     >
       {options.map((option) => {
         const active = option.value === value;

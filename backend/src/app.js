@@ -29,13 +29,17 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads/evidence', express.static(path.join(__dirname, '..', 'uploads', 'evidence')));
 
 // Profile avatars are user-chosen display images (unlike license photos,
-// they carry no verification evidentiary value) — publicly readable like
-// evidence photos so every client can render them with a plain <img>.
+// they carry no verification evidentiary value). New uploads live in
+// Cloudinary (drivetrack/avatars, public) and profilePhotoPath stores the
+// secure_url directly; this legacy local mount keeps pre-Cloudinary rows
+// rendering without a migration.
 app.use('/uploads/avatars', express.static(path.join(__dirname, '..', 'uploads', 'avatars')));
 
-// Driver license photos contain personal information — same URLs as before
-// (/uploads/licenses/<filename>) but served only to authenticated admins
-// via the existing JWT + role middleware. No second auth system.
+// Driver license photos contain personal information. New photos are stored
+// as Cloudinary "authenticated" assets and served through the admin-only
+// /api/v1/media/license-photo proxy. This local mount keeps legacy rows
+// (/uploads/licenses/<filename>) working, still guarded by authenticate +
+// admin role.
 app.use('/uploads/licenses', authenticate, allowRoles('admin'), express.static(path.join(__dirname, '..', 'uploads', 'licenses')));
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));

@@ -48,7 +48,7 @@ export const auditLogService = {
       logs: Array.isArray(data?.logs) ? data.logs : [],
       pagination: {
         page: Number(data?.pagination?.page) || Number(params.page) || 1,
-        limit: Number(data?.pagination?.limit) || Number(params.limit) || 25,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 8,
         total: Number(data?.pagination?.total) || 0,
         totalPages: Number(data?.pagination?.totalPages) || 0,
       },

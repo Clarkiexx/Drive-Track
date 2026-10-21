@@ -170,7 +170,7 @@ export const citationService = {
    * GET /citations — paged variant for the admin Violations register.
    * Same endpoint as listAllCitations, but preserves the backend's
    * `{ citations, pagination }` shape so the table can page. listAllCitations
-   * is left untouched for existing callers (dashboard recent list).
+   * remains available for callers that only need the array.
    */
   listCitationsPage: async (params: CitationListParams = {}): Promise<CitationPage> => {
     const res = await api.get<ApiEnvelope<unknown>>("/citations", { params });
@@ -181,7 +181,7 @@ export const citationService = {
       citations: Array.isArray(data?.citations) ? data.citations : [],
       pagination: {
         page: Number(data?.pagination?.page) || Number(params.page) || 1,
-        limit: Number(data?.pagination?.limit) || Number(params.limit) || 10,
+        limit: Number(data?.pagination?.limit) || Number(params.limit) || 8,
         total: Number(data?.pagination?.total) || 0,
         totalPages: Number(data?.pagination?.totalPages) || 0,
       },

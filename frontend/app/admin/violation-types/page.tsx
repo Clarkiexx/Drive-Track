@@ -7,6 +7,7 @@ import EmptyState from "@/components/common/EmptyState";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
 import StatusFilterSelect, { type StatusFilterOption } from "@/components/common/StatusFilterSelect";
+import TablePagination, { TABLE_PAGE_SIZE } from "@/components/common/TablePagination";
 import { getApiErrorMessage } from "@/lib/axios";
 import {
   formatPenaltyRange,
@@ -36,6 +37,7 @@ function toNumber(value: string | number | null | undefined): number {
 export default function AdminViolationTypesPage() {
   const [types, setTypes] = useState<ViolationTypeRecord[]>([]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -90,6 +92,12 @@ export default function AdminViolationTypesPage() {
     return statusFilter === "active" ? isActive : !isActive;
   });
   const activeCount = types.filter((t) => t.isActive ?? true).length;
+  const totalPages = Math.max(1, Math.ceil(visible.length / TABLE_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRows = visible.slice(
+    (currentPage - 1) * TABLE_PAGE_SIZE,
+    currentPage * TABLE_PAGE_SIZE
+  );
 
   return (
     <div>
@@ -159,7 +167,10 @@ export default function AdminViolationTypesPage() {
           </p>
           <StatusFilterSelect
             value={statusFilter}
-            onChange={setStatusFilter}
+            onChange={(value) => {
+              setStatusFilter(value);
+              setPage(1);
+            }}
             options={STATUS_FILTER_OPTIONS}
           />
         </header>
@@ -197,80 +208,89 @@ export default function AdminViolationTypesPage() {
                 : "Nothing has been retired — every type is currently active."}
           </EmptyState>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[52rem] border-collapse text-left">
-              <caption className="sr-only">Violation types in the catalogue</caption>
-              <thead>
-                <tr className="border-b border-console-line bg-console-canvas/70 text-[10.5px] tracking-[0.14em] text-console-muted uppercase">
-                  <th scope="col" className="px-5 py-2.5 font-bold">
-                    Article / Section
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 font-bold">
-                    Description
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 font-bold">
-                    Category
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 text-right font-bold">
-                    Penalty
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 font-bold">
-                    Status
-                  </th>
-                  <th scope="col" className="px-5 py-2.5 font-bold">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((row) => {
-                  const isActive = row.isActive ?? true;
-                  return (
-                    <tr
-                      key={row.violationTypeId}
-                      className="border-b border-console-line/70 transition-colors last:border-0 hover:bg-brand-50/70"
-                    >
-                      <td className="tabular-nums px-5 py-3.5 align-top text-[13px] font-bold text-ink">
-                        {row.articleSection}
-                      </td>
-                      <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
-                        {row.description}
-                      </td>
-                      <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
-                        {CATEGORY_LABELS[row.category]}
-                      </td>
-                      <td className="tabular-nums px-5 py-3.5 text-right align-top text-[13px] font-bold text-ink">
-                        {formatPenaltyRange(row)}
-                      </td>
-                      <td className="px-5 py-3.5 align-top">
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleStatus(row)}
-                          disabled={actingId !== null}
-                          title={isActive ? "Deactivate — hides from issuance form" : "Activate — shows in issuance form"}
-                          aria-pressed={isActive}
-                          className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] text-[11px] leading-tight font-bold transition-opacity disabled:opacity-60 ${
-                            isActive ? "bg-go-soft text-go-ink" : "bg-chip-neutral text-muted"
-                          }`}
-                        >
-                          {isActive ? "Active" : "Inactive"}
-                        </button>
-                      </td>
-                      <td className="px-5 py-3.5 align-top">
-                        <button
-                          type="button"
-                          onClick={() => setEditing(row)}
-                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-console-line bg-surface px-3 py-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:border-brand-300 hover:bg-brand-soft"
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[52rem] border-collapse text-left">
+                <caption className="sr-only">Violation types in the catalogue</caption>
+                <thead>
+                  <tr className="border-b border-console-line bg-console-canvas/70 text-[10.5px] tracking-[0.14em] text-console-muted uppercase">
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Article / Section
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Description
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Category
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 text-right font-bold">
+                      Penalty
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      Status
+                    </th>
+                    <th scope="col" className="px-5 py-2.5 font-bold">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedRows.map((row) => {
+                    const isActive = row.isActive ?? true;
+                    return (
+                      <tr
+                        key={row.violationTypeId}
+                        className="border-b border-console-line/70 transition-colors last:border-0 hover:bg-brand-50/70"
+                      >
+                        <td className="tabular-nums px-5 py-3.5 align-top text-[13px] font-bold text-ink">
+                          {row.articleSection}
+                        </td>
+                        <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
+                          {row.description}
+                        </td>
+                        <td className="px-5 py-3.5 align-top text-[13px] text-ink/80">
+                          {CATEGORY_LABELS[row.category]}
+                        </td>
+                        <td className="tabular-nums px-5 py-3.5 text-right align-top text-[13px] font-bold text-ink">
+                          {formatPenaltyRange(row)}
+                        </td>
+                        <td className="px-5 py-3.5 align-top">
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleStatus(row)}
+                            disabled={actingId !== null}
+                            title={isActive ? "Deactivate — hides from issuance form" : "Activate — shows in issuance form"}
+                            aria-pressed={isActive}
+                            className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-[3px] text-[11px] leading-tight font-bold transition-opacity disabled:opacity-60 ${
+                              isActive ? "bg-go-soft text-go-ink" : "bg-chip-neutral text-muted"
+                            }`}
+                          >
+                            {isActive ? "Active" : "Inactive"}
+                          </button>
+                        </td>
+                        <td className="px-5 py-3.5 align-top">
+                          <button
+                            type="button"
+                            onClick={() => setEditing(row)}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-console-line bg-surface px-3 py-1.5 text-[12.5px] font-semibold text-ink transition-colors hover:border-brand-300 hover:bg-brand-soft"
+                          >
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <TablePagination
+              page={currentPage}
+              totalPages={totalPages}
+              total={visible.length}
+              onPageChange={setPage}
+              itemLabel="violation types"
+            />
+          </>
         )}
       </section>
 

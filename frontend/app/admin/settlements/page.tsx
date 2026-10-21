@@ -23,7 +23,7 @@ import {
 import { dashboardService } from "@/services/dashboard.service";
 
 /** Rows per settlements page. */
-const PAGE_LIMIT = 10;
+const PAGE_LIMIT = 8;
 
 type SettlementTab = "unsettled" | "settled" | "all";
 

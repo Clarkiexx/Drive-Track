@@ -12,8 +12,8 @@ import {
   type AuditLogRecord,
 } from "@/services/audit-log.service";
 
-/** Rows per audit page — matches the backend default page size. */
-const PAGE_LIMIT = 25;
+/** Every console table pages eight rows at a time. */
+const PAGE_LIMIT = 8;
 
 export default function AdminAuditLogPage() {
   const [logs, setLogs] = useState<AuditLogRecord[]>([]);

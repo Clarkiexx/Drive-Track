@@ -272,9 +272,20 @@ model CitationViolation {
   violationTypeId   Int     @map("violation_type_id")
   penaltyAtIssuance Decimal @map("penalty_at_issuance") @db.Decimal(10, 2)
 
+  // Per-violation payment state. NULL settlement_status means unpaid/legacy;
+  // payment_reference holds the Xendit session id while a checkout is active
+  // and after that session settles this row. It is not unique because one
+  // session can cover several violations.
+  settlementStatus SettlementStatus? @map("settlement_status")
+  settledAt        DateTime?        @map("settled_at") @db.Timestamptz(3)
+  paymentMethod    PaymentMethod?   @map("payment_method")
+  paymentReference String?          @map("payment_reference") @db.VarChar(255)
+
   citation      Citation      @relation(fields: [citationId], references: [citationId], onDelete: Cascade)
   violationType ViolationType @relation(fields: [violationTypeId], references: [violationTypeId], onDelete: Cascade)
 
+  @@index([citationId])
+  @@index([paymentReference])
   @@map("citation_violations")
 }
 

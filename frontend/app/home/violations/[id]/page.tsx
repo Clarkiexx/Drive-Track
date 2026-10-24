@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, RotateCw } from "lucide-react";
 
@@ -12,9 +12,13 @@ import {
   EvidenceStrip,
   FineBox,
   InfoRow,
-  ViolationsBox,
 } from "@/components/common/CitationReceipt";
-import { formatDateTimeManila } from "@/components/common/dates";
+import PayableViolationsBox, {
+  buildPayableViolationRows,
+  payableRowIds,
+  type PayableViolationRow,
+} from "@/components/common/PayableViolationsBox";
+import { formatDateTimeManila, formatPeso } from "@/components/common/dates";
 import axios from "axios";
 import { getApiErrorMessage } from "@/lib/axios";
 import { getMediaUrl } from "@/lib/media";
@@ -89,6 +93,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [isPaying, setIsPaying] = useState(false);
+  const [isCancelPending, setIsCancelPending] = useState(false);
   const [payError, setPayError] = useState("");
   const [payNotice, setPayNotice] = useState("");
   const [sessionOpened, setSessionOpened] = useState(false);
@@ -96,8 +101,17 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   /**
    * The live Xendit checkout for this citation. Reused while unexpired so
    * repeat taps re-open the SAME link instead of spawning duplicate tabs.
+   * Carries the session's violation scope: while it exists the driver's
+   * selection is locked to these rows (`legacy`/no ids locks every unpaid
+   * violation).
    */
-  const [activeCheckout, setActiveCheckout] = useState<{ url: string; expiresAt: number } | null>(null);
+  const [activeCheckout, setActiveCheckout] = useState<{
+    url: string;
+    expiresAt: number;
+    violationIds?: number[];
+    amount?: number;
+    legacy?: boolean;
+  } | null>(null);
   /**
    * Handle of the opened checkout tab (same page lifetime only). When it is
    * still open we focus it instead of opening another tab.
@@ -130,14 +144,32 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
         // network that lost the original response. localStorage remains a
         // fallback only when the server cannot be reached.
         let serverReachable = false;
-        let serverCheckout: StoredCheckout | null = null;
+        let serverCheckout: {
+          url: string;
+          expiresAt: number;
+          violationIds?: number[];
+          amount?: number;
+          legacy?: boolean;
+        } | null = null;
         try {
           const active = await paymentService.getActiveCheckout(id);
           serverReachable = true;
           if (active.active && active.checkoutUrl && active.expiresAt) {
             const parsed = Date.parse(active.expiresAt);
             if (Number.isFinite(parsed) && parsed > Date.now()) {
-              serverCheckout = { url: active.checkoutUrl, expiresAt: parsed };
+              serverCheckout = {
+                url: active.checkoutUrl,
+                expiresAt: parsed,
+                violationIds: Array.isArray(active.violationIds)
+                  ? active.violationIds.filter((value) => Number.isFinite(value))
+                  : undefined,
+                amount: typeof active.amount === "number" ? active.amount : undefined,
+                // No per-violation scope on the session means it charges the
+                // whole citation: lock every unpaid violation to it.
+                legacy:
+                  active.legacy === true ||
+                  (active.legacy === undefined && !active.violationIds?.length),
+              };
             }
           }
         } catch {
@@ -145,9 +177,15 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
         }
 
         const stored = readStoredCheckout(id);
-        const next = serverReachable ? serverCheckout : stored;
+        // localStorage only keeps the URL/expiry; a fallback session carries no
+        // selection, so it is treated as legacy and locks the whole balance.
+        const next = serverReachable
+          ? serverCheckout
+          : stored
+            ? { ...stored, legacy: true }
+            : null;
         setActiveCheckout(next);
-        if (next) writeStoredCheckout(id, next);
+        if (next) writeStoredCheckout(id, { url: next.url, expiresAt: next.expiresAt });
         else removeStoredCheckout(id);
       }
     } catch (error) {
@@ -156,6 +194,69 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       setIsLoading(false);
     }
   }, [id]);
+
+  /** Rows of the payable violations list, rebuilt whenever the receipt does. */
+  const rows = useMemo(
+    () => (citation ? buildPayableViolationRows(citation) : []),
+    [citation]
+  );
+
+  const unpaidRowIds = useMemo(() => payableRowIds(rows), [rows]);
+
+  /**
+   * While an open checkout session exists the selection is pinned to the rows
+   * it charges (all unpaid for `legacy` sessions). Otherwise null — the driver
+   * chooses freely.
+   */
+  const lockedIds = useMemo(() => {
+    if (!activeCheckout) return null;
+    const sessionIds = activeCheckout.legacy ? null : new Set(activeCheckout.violationIds ?? []);
+    if (!sessionIds) return unpaidRowIds;
+    const pinned = unpaidRowIds.filter((violationId) => sessionIds.has(violationId));
+    // A dangling scope (e.g. the session predates a reload) falls back to the
+    // whole unpaid set rather than offering a charge that covers no rows.
+    return pinned.length > 0 ? pinned : unpaidRowIds;
+  }, [activeCheckout, unpaidRowIds]);
+
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+
+  // Default/effective selection: the locked set while a session exists,
+  // otherwise every unpaid violation (resets when the receipt reloads and the
+  // scope changes, e.g. after a partial payment clears the session).
+  useEffect(() => {
+    setSelectedIds(lockedIds ?? unpaidRowIds);
+  }, [lockedIds, unpaidRowIds, citation?.citationId]);
+
+  function toggleViolation(violationId: number) {
+    if (lockedIds || isPaying || isCancelPending) return;
+    setSelectedIds((prev) =>
+      prev.includes(violationId)
+        ? prev.filter((value) => value !== violationId)
+        : [...prev, violationId]
+    );
+  }
+
+  function handleSelectAll() {
+    if (lockedIds || isPaying || isCancelPending) return;
+    setSelectedIds(unpaidRowIds);
+  }
+
+  function handleClearSelection() {
+    if (lockedIds || isPaying || isCancelPending) return;
+    setSelectedIds([]);
+  }
+
+  /** Total fine covered by the ticked rows. */
+  const selectedAmount = useMemo(() => {
+    const selected = new Set(selectedIds);
+    return rows.reduce(
+      (sum, row) =>
+        !row.paid && row.violationId != null && selected.has(row.violationId)
+          ? sum + row.amount
+          : sum,
+      0
+    );
+  }, [rows, selectedIds]);
 
   useEffect(() => {
     // Deferred rather than run in the effect body: the token only exists in the
@@ -187,7 +288,15 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     void (async () => {
       try {
         const status = await paymentService.getStatus(id);
-        if (!cancelled && status.settled) await load();
+        if (cancelled) return;
+        // Reload on full settlement OR when a partial payment moved the
+        // running totals past what the receipt currently holds.
+        const totalsMoved =
+          (typeof status.paidAmount === "number" &&
+            status.paidAmount !== (citation.paidAmount ?? 0)) ||
+          (typeof status.remainingAmount === "number" &&
+            status.remainingAmount !== (citation.remainingAmount ?? 0));
+        if (status.settled || totalsMoved) await load();
       } catch {
         // The webhook or the refresh button remains authoritative.
       }
@@ -278,8 +387,18 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     }
   }
 
+  /**
+   * Starts (or resumes) the checkout for the driver's selected violations.
+   * The selection is passed straight to the backend so a partial payment
+   * charges only those rows; when the citation's rows carry no ids we fall
+   * back to the legacy whole-citation charge. The same ids are retried when
+   * the backend says a creation race is still in flight.
+   */
   async function handlePayNow() {
     if (payingRef.current || isPaying) return;
+
+    const selection = lockedIds ? lockedIds : selectedIds;
+    const violationIds = selection.length > 0 ? selection : undefined;
 
     // The cached link is only a fallback for a server/network failure. Every
     // normal tap asks the backend first: it is the authority on whether the
@@ -296,21 +415,22 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     setPayError("");
     setPayNotice("");
 
-    const startCheckout = async () => {
+    const startCheckout = async (ids?: number[]) => {
       try {
-        return await paymentService.createCheckout(id);
+        return await paymentService.createCheckout(id, ids);
       } catch (error) {
         if (!isSessionBeingCreated(error)) throw error;
         // Another tab/device won the creation race. Wait for it to persist
         // its session, then retrieve that same session instead of creating
-        // a second one. One retry only.
+        // a second one. One retry only, with the same selection.
         await new Promise((resolve) => window.setTimeout(resolve, 1800));
-        return paymentService.createCheckout(id);
+        return paymentService.createCheckout(id, ids);
       }
     };
 
     try {
-      const { checkoutUrl, expiresAt, resumed } = await startCheckout();
+      const { checkoutUrl, expiresAt, resumed, violationIds: sessionIds, amount, legacy } =
+        await startCheckout(violationIds);
 
       // Hosted Xendit checkout, replacing expo-web-browser's
       // openBrowserAsync. Returning from the tab never settles anything on its
@@ -320,9 +440,18 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       const checkout = {
         url: checkoutUrl,
         expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : Date.now() + 30 * 60 * 1000,
+        violationIds: Array.isArray(sessionIds)
+          ? sessionIds
+          : Array.isArray(violationIds)
+            ? violationIds
+            : undefined,
+        amount: typeof amount === "number" ? amount : undefined,
+        legacy:
+          legacy === true ||
+          (legacy === undefined && !(Array.isArray(sessionIds) ? sessionIds.length : 0)),
       };
       setActiveCheckout(checkout);
-      writeStoredCheckout(id, checkout);
+      writeStoredCheckout(id, { url: checkout.url, expiresAt: checkout.expiresAt });
       if (resumed) {
         setPayNotice("Resumed your unfinished payment — no new payment was created.");
       }
@@ -361,6 +490,41 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       // Reload so a session created by a concurrent request (or a payment
       // completed in the checkout tab) is reflected immediately.
       void load();
+    }
+  }
+
+  /** Re-opens the pinned checkout tab without creating a new session. */
+  function handleResumeCheckout() {
+    if (!activeCheckout) return;
+    setPayError("");
+    openCheckout(
+      activeCheckout.url,
+      Boolean(checkoutTabRef.current && !checkoutTabRef.current.closed)
+    );
+    setSessionOpened(true);
+  }
+
+  /**
+   * Abandons the open session so the driver can pick a different set of
+   * violations. `completed: true` means the session was already paid — the
+   * receipt reloads into its new state rather than "cancelling" a payment.
+   */
+  async function handleCancelCheckout() {
+    if (isCancelPending || isPaying) return;
+    setIsCancelPending(true);
+    setPayError("");
+    try {
+      const result = await paymentService.cancelCheckout(id);
+      setPayNotice(
+        result.completed
+          ? "That payment was already completed. Refreshing your receipt…"
+          : "Payment session cancelled. You can now choose a different set of violations."
+      );
+      await load();
+    } catch (error) {
+      setPayError(getApiErrorMessage(error, "Unable to cancel the payment session."));
+    } finally {
+      setIsCancelPending(false);
     }
   }
 
@@ -420,7 +584,9 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
                     citation.settlementStatus === "settled"
                       ? "success"
                       : paymentReturn === "success"
-                        ? "info"
+                        ? citation.partiallyPaid
+                          ? "success"
+                          : "info"
                         : "warn"
                   }
                   className="text-[13px]"
@@ -428,7 +594,9 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
                   {citation.settlementStatus === "settled"
                     ? "Payment confirmed. This citation is settled."
                     : paymentReturn === "success"
-                      ? "Payment submitted. We're confirming it with Xendit; the status below updates automatically."
+                      ? citation.partiallyPaid
+                        ? "Payment confirmed for the violations you selected. This citation is partially paid — the remaining balance is still due."
+                        : "Payment submitted. We're confirming it with Xendit; the status below updates automatically."
                       : "Payment cancelled. No payment was taken; this citation is still pending."}
                 </NoticeBox>
                 <Link
@@ -442,14 +610,23 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
             ) : null}
             <Receipt
               citation={citation}
+              rows={rows}
+              checkout={activeCheckout}
+              selectedIds={selectedIds}
+              selectedAmount={selectedAmount}
               isPaying={isPaying}
+              isCancelPending={isCancelPending}
               payError={payError}
               payNotice={payNotice}
-              canResume={Boolean(activeCheckout)}
               awaitingConfirmation={
                 sessionOpened && citation.settlementStatus === "pending" && !isPaying && !payError
               }
               onPay={handlePayNow}
+              onToggleViolation={toggleViolation}
+              onSelectAll={handleSelectAll}
+              onClearSelection={handleClearSelection}
+              onResumeCheckout={handleResumeCheckout}
+              onCancelCheckout={handleCancelCheckout}
             />
           </>
         ) : null}
@@ -460,34 +637,67 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
 
 type ReceiptProps = {
   citation: CitationRecord;
+  rows: PayableViolationRow[];
+  /** The live checkout session, when one exists (locks the selection). */
+  checkout: {
+    url: string;
+    expiresAt: number;
+    violationIds?: number[];
+    amount?: number;
+    legacy?: boolean;
+  } | null;
+  selectedIds: number[];
+  selectedAmount: number;
   isPaying: boolean;
+  isCancelPending: boolean;
   payError: string;
   payNotice: string;
-  canResume: boolean;
   awaitingConfirmation: boolean;
   onPay: () => void;
+  onToggleViolation: (violationId: number) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
+  onResumeCheckout: () => void;
+  onCancelCheckout: () => void;
 };
 
 /** The receipt card, laid out in the same order as ViolationDetailScreen. */
 function Receipt({
   citation,
+  rows,
+  checkout,
+  selectedIds,
+  selectedAmount,
   isPaying,
+  isCancelPending,
   payError,
   payNotice,
-  canResume,
   awaitingConfirmation,
   onPay,
+  onToggleViolation,
+  onSelectAll,
+  onClearSelection,
+  onResumeCheckout,
+  onCancelCheckout,
 }: ReceiptProps) {
-  const violationDescriptions = (citation.violations ?? [])
-    .map((entry) => entry.violationType?.description)
-    .filter((description): description is string => Boolean(description));
+  const unpaidCount = rows.filter(
+    (row) => !row.paid && row.violationId != null
+  ).length;
+  const allUnpaidSelected = unpaidCount > 0 && selectedIds.length === unpaidCount;
+
+  // Warnings carry no fine, and settled/cancelled citations are not payable —
+  // their receipts render the plain list with no pay controls.
+  const payable =
+    citation.recordType !== "warning" && citation.settlementStatus === "pending";
 
   const settlementLabel =
     citation.settlementStatus === "settled"
       ? "✅ Settled"
       : citation.settlementStatus === "cancelled"
         ? "Cancelled"
-        : "⚠️ Unsettled";
+        : citation.partiallyPaid
+          ? "⏳ Partially paid"
+          : "⚠️ Unsettled";
 
   // Prisma returns the relation under its LOWERCASE key; the old Sequelize
   // capitalised `Enforcer` no longer exists, and reading it would render
@@ -507,9 +717,15 @@ function Receipt({
         {citation.citationNumber}
       </h2>
 
-      <ViolationsBox
-        violations={violationDescriptions}
+      <PayableViolationsBox
+        rows={rows}
         otherViolation={citation.otherViolation ?? undefined}
+        selectable={payable}
+        locked={Boolean(checkout)}
+        selectedIds={selectedIds}
+        onToggle={onToggleViolation}
+        onSelectAll={onSelectAll}
+        onClear={onClearSelection}
       />
 
       {/* Warning records carry no fine, so RN skipped the whole panel. */}
@@ -518,36 +734,78 @@ function Receipt({
           fineAmount={citation.fineAmount ?? 0}
           status={citation.settlementStatus}
           settlementLabel={settlementLabel}
-          paymentMethod={citation.paymentMethod}
-          paymentReference={citation.paymentReference}
+          paymentMethod={citation.paymentMethod ?? citation.lastPaymentMethod}
+          paymentReference={citation.paymentReference ?? citation.lastPaymentReference}
+          paidAmount={citation.paidAmount}
+          remainingAmount={citation.remainingAmount}
+          partiallyPaid={citation.partiallyPaid}
+          paySelection={payable ? { amount: selectedAmount, count: selectedIds.length } : null}
           pendingNote={
             awaitingConfirmation
               ? "Payment submitted — awaiting confirmation. Bank transfers may take a while."
               : undefined
           }
           action={
-            citation.settlementStatus === "pending" ? (
+            payable ? (
               <div className="space-y-2">
-                {canResume && !payNotice ? (
-                  <p className="text-[11px] leading-snug text-center text-muted">
-                    Your previous payment session is still open and will be reused.
-                  </p>
-                ) : null}
-                {payNotice ? (
-                  <NoticeBox tone="info" className="text-left">
-                    {payNotice}
-                  </NoticeBox>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={onPay}
-                  disabled={isPaying}
-                  className="w-full rounded-[10px] bg-brand-500 py-3 text-[15px] font-bold text-white transition-colors hover:bg-brand-600 disabled:opacity-60"
-                >
-                  {isPaying ? "Starting payment…" : canResume ? "↗ Resume payment" : "💳 Pay Now"}
-                </button>
+                {checkout ? (
+                  <>
+                    <p className="text-[11px] leading-snug text-center text-muted">
+                      Your payment session is still open
+                      {typeof checkout.amount === "number"
+                        ? ` for ${formatPeso(checkout.amount)}`
+                        : ""}
+                      ; the selection is locked until you cancel it.
+                    </p>
+                    {payNotice ? (
+                      <NoticeBox tone="info" className="text-left">
+                        {payNotice}
+                      </NoticeBox>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={onResumeCheckout}
+                      disabled={isPaying}
+                      className="w-full rounded-[10px] bg-brand-500 py-3 text-[15px] font-bold text-white transition-colors hover:bg-brand-600 disabled:opacity-60"
+                    >
+                      {isPaying ? "Starting payment…" : "↗ Resume payment"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onCancelCheckout}
+                      disabled={isCancelPending || isPaying}
+                      className="w-full rounded-[10px] border border-hairline bg-surface py-2.5 text-[14px] font-semibold text-signal-stop transition-colors hover:bg-surface-sunken disabled:opacity-60"
+                    >
+                      {isCancelPending ? "Cancelling payment…" : "Cancel payment"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {payNotice ? (
+                      <NoticeBox tone="info" className="text-left">
+                        {payNotice}
+                      </NoticeBox>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={onPay}
+                      disabled={isPaying || selectedIds.length === 0}
+                      className="w-full rounded-[10px] bg-brand-500 py-3 text-[15px] font-bold text-white transition-colors hover:bg-brand-600 disabled:opacity-60"
+                    >
+                      {isPaying
+                        ? "Starting payment…"
+                        : selectedIds.length === 0
+                          ? "Select a violation to pay"
+                          : allUnpaidSelected
+                            ? `💳 Pay Now (${formatPeso(selectedAmount)})`
+                            : `💳 Pay Selected (${formatPeso(selectedAmount)})`}
+                    </button>
+                  </>
+                )}
                 {payError ? (
-                  <p className="text-[12px] leading-snug text-center text-signal-stop">{payError}</p>
+                  <p className="text-[12px] leading-snug text-center text-signal-stop">
+                    {payError}
+                  </p>
                 ) : null}
               </div>
             ) : undefined

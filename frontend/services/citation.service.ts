@@ -18,6 +18,15 @@ export interface CitationViolationEntry {
     articleSection?: string | null;
     description?: string | null;
   } | null;
+  /**
+   * Per-violation settlement state for partial payments. Each violation can be
+   * paid off on its own, so these are resolved per join row rather than from
+   * the citation header. Absent on legacy citations that settled as a whole.
+   */
+  settlementStatus?: SettlementStatus | null;
+  settledAt?: string | null;
+  paymentMethod?: PaymentMethod | null;
+  paymentReference?: string | null;
 }
 
 /** Photo evidence row (backend citationInclude.evidence). */
@@ -66,6 +75,17 @@ export interface CitationRecord {
   settledAt?: string | null;
   paymentMethod?: PaymentMethod | null;
   paymentReference?: string | null;
+  /**
+   * Partial-payment rollup computed by the backend from the citation's
+   * violations: how much has been paid, how much is still outstanding, and
+   * whether at least one (but not all) violation has been settled.
+   */
+  paidAmount?: number;
+  remainingAmount?: number;
+  partiallyPaid?: boolean;
+  /** Reference/method of the most recent successful payment, if any. */
+  lastPaymentReference?: string | null;
+  lastPaymentMethod?: PaymentMethod | null;
   /**
    * Relations the backend joins in (citationInclude). Prisma returns the
    * LOWERCASE relation keys — `enforcer`, not the `Enforcer` the old

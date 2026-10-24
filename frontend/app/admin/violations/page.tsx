@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  CircleCheckBig,
   Flag,
+  Lock,
   RotateCw,
   ScrollText,
   Search,
@@ -14,13 +16,17 @@ import EmptyState from "@/components/common/EmptyState";
 import CitationMap from "@/components/common/CitationMap";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
-import StatusChip from "@/components/common/StatusChip";
+import StatusChip, { PartialStatusChip } from "@/components/common/StatusChip";
 import {
   formatPeso,
   formatShortDateManila,
   formatTimeManila,
 } from "@/components/common/dates";
-import { RECORD_TYPE_LABELS, isRecordType } from "@/constants/violations";
+import {
+  RECORD_TYPE_LABELS,
+  isRecordType,
+  paymentMethodLabel,
+} from "@/constants/violations";
 import { getApiErrorMessage } from "@/lib/axios";
 import { getMediaUrl } from "@/lib/media";
 import {
@@ -71,6 +77,35 @@ function violationSummary(citation: CitationRecord): string {
 function toNumber(value: string | number | null | undefined): number {
   const parsed = typeof value === "number" ? value : Number.parseFloat(value ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Partial-payment rollup for one citation. Trusts the backend's
+ * remainingAmount; falls back to deriving it from paidAmount for legacy rows
+ * that only carry the header fine.
+ */
+function partialAmounts(citation: CitationRecord): {
+  total: number;
+  paid: number;
+  remaining: number;
+} {
+  const total = toNumber(citation.fineAmount);
+  const paid = typeof citation.paidAmount === "number" ? Math.max(citation.paidAmount, 0) : 0;
+  const remaining =
+    typeof citation.remainingAmount === "number"
+      ? Math.max(citation.remainingAmount, 0)
+      : Math.max(total - paid, 0);
+  return { total, paid, remaining };
+}
+
+/**
+ * Whether money has touched this citation without it being fully settled. The
+ * backend blocks fine overrides and cancellations once a payment exists; the
+ * UI mirrors that here so admins see why the actions are locked.
+ */
+function hasRecordedPayments(citation: CitationRecord | null): boolean {
+  if (!citation) return false;
+  return citation.partiallyPaid === true || toNumber(citation.paidAmount) > 0;
 }
 
 export default function AdminViolationsPage() {
@@ -331,7 +366,12 @@ export default function AdminViolationsPage() {
                       </td>
                       <td className="px-5 py-3.5 align-top">
                         <div className="flex flex-col items-start gap-1.5">
-                          <StatusChip status={citation.settlementStatus} />
+                          {hasRecordedPayments(citation) &&
+                          citation.settlementStatus === "pending" ? (
+                            <PartialStatusChip />
+                          ) : (
+                            <StatusChip status={citation.settlementStatus} />
+                          )}
                           <span className="inline-flex items-center gap-1.5 text-[11px] leading-none font-semibold text-console-muted">
                             {citation.verified ? (
                               <span className="inline-flex items-center gap-1 text-brand-600">
@@ -492,14 +532,17 @@ function CitationDetailDialog({
       action: () => runAction(() => citationService.verifyCitation(citationId), "Citation verified."),
     });
 
-  const askSettle = () =>
+  const askSettle = () => {
+    const partialPay = hasRecordedPayments(citation);
     setConfirm({
       title: "Mark this citation as settled?",
-      message:
-        "Use this once the fine has actually been paid (e.g. the driver settled it in person at the CTMO office). The driver is notified automatically.",
+      message: partialPay
+        ? `This settles the outstanding balance of ${formatPeso(rollup?.remaining ?? 0)} — ${formatPeso(rollup?.paid ?? 0)} has already been paid of the ${formatPeso(rollup?.total ?? 0)} fine. The driver is notified automatically.`
+        : "Use this once the fine has actually been paid (e.g. the driver settled it in person at the CTMO office). The driver is notified automatically.",
       confirmLabel: "Mark as Settled",
       action: () => runAction(() => citationService.settleCitation(citationId), "Citation marked as settled."),
     });
+  };
 
   const askRemind = () =>
     setConfirm({
@@ -565,6 +608,10 @@ function CitationDetailDialog({
 
   const isPending = citation?.settlementStatus === "pending";
   const isPayable = isPending && citation?.recordType === "citation";
+  // The backend rejects fine overrides and cancellations once a payment is on
+  // record — mirror that here instead of letting the request fail.
+  const paymentLocked = hasRecordedPayments(citation);
+  const rollup = citation ? partialAmounts(citation) : null;
 
   return (
     <div
@@ -649,13 +696,40 @@ function CitationDetailDialog({
                   <h4 className="mt-4 text-[12px] font-bold tracking-[0.12em] text-console-muted uppercase">
                     Violation
                   </h4>
-                  <ul className="mt-1.5 space-y-1">
-                    {(citation.violations || []).map((v) => (
-                      <li key={v.id ?? v.violationType?.violationTypeId} className="text-[13px] text-ink/80">
-                        • {v.violationType?.description || "Violation"} (
-                        {formatPeso(toNumber(v.penaltyAtIssuance))})
-                      </li>
-                    ))}
+                  <ul className="mt-1.5 space-y-1.5">
+                    {(citation.violations || []).map((v) => {
+                      const rowSettled = v.settlementStatus === "settled";
+                      // warning_only rows carry no fine, so payment state is
+                      // meaningless there; anything unresolved reads as unpaid.
+                      const rowWarning = v.settlementStatus === "warning_only";
+                      return (
+                        <li
+                          key={v.id ?? v.violationType?.violationTypeId}
+                          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink/80"
+                        >
+                          <span>
+                            • {v.violationType?.description || "Violation"} (
+                            {formatPeso(toNumber(v.penaltyAtIssuance))})
+                          </span>
+                          {rowSettled ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-go-soft px-2 py-px text-[10.5px] leading-tight font-bold text-go-ink">
+                              <CircleCheckBig size={10} strokeWidth={2.6} aria-hidden />
+                              Paid
+                            </span>
+                          ) : rowWarning ? null : (
+                            <span className="text-[11px] leading-tight font-semibold text-console-muted">
+                              Unpaid
+                            </span>
+                          )}
+                          {rowSettled && v.paymentMethod ? (
+                            <span className="tabular text-[11.5px] text-console-muted">
+                              {paymentMethodLabel(v.paymentMethod)}
+                              {v.paymentReference ? ` • ${v.paymentReference}` : ""}
+                            </span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                     {(!citation.violations || citation.violations.length === 0) && (
                       <li className="text-[13px] text-ink/80">
                         {citation.otherViolation || "—"}
@@ -725,9 +799,24 @@ function CitationDetailDialog({
                       No fine — warning only
                     </p>
                   ) : (
-                    <p className="tabular-nums mt-1.5 text-[18px] font-bold text-ink">
-                      {formatPeso(toNumber(citation.fineAmount))}
-                    </p>
+                    <>
+                      <p className="tabular-nums mt-1.5 text-[18px] font-bold text-ink">
+                        {formatPeso(rollup?.total ?? toNumber(citation.fineAmount))}
+                      </p>
+                      {paymentLocked && rollup ? (
+                        <p className="tabular-nums mt-1 text-[12.5px]">
+                          <span className="font-semibold text-go-ink">
+                            Paid: {formatPeso(rollup.paid)}
+                          </span>
+                          <span className="text-console-muted">
+                            {" "}of {formatPeso(rollup.total)} total
+                          </span>
+                          <span className="font-semibold text-brand-700">
+                            {" "}• Remaining: {formatPeso(rollup.remaining)}
+                          </span>
+                        </p>
+                      ) : null}
+                    </>
                   )}
                   {citation.fineOverrideReason ? (
                     <p className="mt-1 text-[12px] text-console-muted">
@@ -740,6 +829,10 @@ function CitationDetailDialog({
                   </h4>
                   <div className="mt-1.5 flex flex-wrap items-center gap-2">
                     <StatusChip status={citation.settlementStatus} />
+                    {hasRecordedPayments(citation) &&
+                    citation.settlementStatus === "pending" ? (
+                      <PartialStatusChip />
+                    ) : null}
                     <span className="text-[12.5px] font-semibold text-console-muted">
                       {citation.verified ? "Verified" : "Not yet verified"}
                     </span>
@@ -817,8 +910,14 @@ function CitationDetailDialog({
                     <button
                       type="button"
                       onClick={() => askProtest("uphold")}
-                      disabled={isActing || !isPending}
-                      title={!isPending ? "Only unsettled citations can be cancelled through protest." : undefined}
+                      disabled={isActing || !isPending || paymentLocked}
+                      title={
+                        !isPending
+                          ? "Only unsettled citations can be cancelled through protest."
+                          : paymentLocked
+                            ? "A payment has already been recorded."
+                            : undefined
+                      }
                       className="rounded-lg border border-console-line bg-surface px-3.5 py-2 text-[12.5px] font-semibold text-ink hover:bg-brand-soft disabled:opacity-60"
                     >
                       Uphold Protest
@@ -829,7 +928,8 @@ function CitationDetailDialog({
                   <button
                     type="button"
                     onClick={askCancel}
-                    disabled={isActing}
+                    disabled={isActing || paymentLocked}
+                    title={paymentLocked ? "A payment has already been recorded." : undefined}
                     className="rounded-lg border border-signal-stop/40 bg-danger-soft px-3.5 py-2 text-[12.5px] font-semibold text-signal-stop hover:bg-danger-soft/70 disabled:opacity-60"
                   >
                     Cancel Citation
@@ -845,7 +945,8 @@ function CitationDetailDialog({
                         setOverrideError("");
                         setShowOverride(true);
                       }}
-                      disabled={isActing}
+                      disabled={isActing || paymentLocked}
+                      title={paymentLocked ? "A payment has already been recorded." : undefined}
                       className="rounded-lg border border-console-line bg-surface px-3.5 py-2 text-[12.5px] font-semibold text-ink hover:bg-brand-soft disabled:opacity-60"
                     >
                       Override Fine
@@ -879,6 +980,14 @@ function CitationDetailDialog({
                   </button>
                 ) : null}
               </div>
+              {paymentLocked && citation.recordType !== "warning" ? (
+                <p className="mt-3 inline-flex items-start gap-1.5 text-[12px] text-console-muted">
+                  <Lock size={13} aria-hidden className="mt-px shrink-0" />
+                  A payment has already been recorded — the fine is locked against
+                  overrides and this citation can no longer be cancelled or upheld for
+                  cancellation.
+                </p>
+              ) : null}
               {citation.recordType === "warning" ? (
                 <p className="mt-3 inline-flex items-start gap-1.5 text-[12px] text-console-muted">
                   <TriangleAlert size={13} aria-hidden className="mt-px shrink-0" />

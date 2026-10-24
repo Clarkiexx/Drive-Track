@@ -6,19 +6,34 @@ const { prisma, prismaErrorToHttp, toDateOnlyString, toNumber } = require('../li
 
 /** GET /dashboard/summary — the 4 stat cards on the admin Dashboard,
  * plus unsettledAmount used by the Settlements page's "Total Unsettled"
- * badge (a true system-wide sum, not just whatever page is on screen). */
+ * badge (a true system-wide sum, not just whatever page is on screen).
+ *
+ * unsettledAmount is the *remaining* balance: pending citations' fines minus
+ * the penalties of rows already settled by partial payments, clamped at 0.
+ * Two aggregate queries (no N+1) cover the whole system. */
 async function getSummary(req, res, next) {
   try {
-    const [totalDrivers, totalEnforcers, totalViolations, unsettledViolations, unsettled] = await Promise.all([
-      prisma.driver.count(),
-      prisma.enforcer.count(),
-      prisma.citation.count(),
-      prisma.citation.count({ where: { settlementStatus: 'pending' } }),
-      prisma.citation.aggregate({
-        where: { settlementStatus: 'pending' },
-        _sum: { fineAmount: true },
-      }),
-    ]);
+    const [totalDrivers, totalEnforcers, totalViolations, unsettledViolations, pendingFines, settledRows] =
+      await Promise.all([
+        prisma.driver.count(),
+        prisma.enforcer.count(),
+        prisma.citation.count(),
+        prisma.citation.count({ where: { settlementStatus: 'pending' } }),
+        prisma.citation.aggregate({
+          where: { settlementStatus: 'pending' },
+          _sum: { fineAmount: true },
+        }),
+        prisma.citationViolation.aggregate({
+          where: {
+            settlementStatus: 'settled',
+            citation: { settlementStatus: 'pending' },
+          },
+          _sum: { penaltyAtIssuance: true },
+        }),
+      ]);
+
+    const pendingTotal = toNumber(pendingFines._sum.fineAmount) || 0;
+    const alreadyPaid = toNumber(settledRows._sum.penaltyAtIssuance) || 0;
 
     return success(res, {
       totalDrivers,
@@ -27,7 +42,7 @@ async function getSummary(req, res, next) {
       unsettledViolations,
       // Prisma returns a Decimal (or null for an empty set) — the API has
       // always answered with a plain JSON number here.
-      unsettledAmount: toNumber(unsettled._sum.fineAmount) || 0,
+      unsettledAmount: Math.max(0, pendingTotal - alreadyPaid),
     });
   } catch (err) {
     next(err);

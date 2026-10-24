@@ -72,7 +72,18 @@ async function cancelSessionReference(reference) {
  * fine overrides cannot interleave. The database is Postgres/Neon.
  */
 async function lockCitation(tx, citationId) {
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(${citationId})`;
+  // pg_advisory_xact_lock returns void. Prisma 7's $queryRaw tries to
+  // deserialize that void column and throws; $executeRaw runs the SELECT
+  // without deserializing the result, while still taking the transaction-
+  // scoped advisory lock.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${citationId})`;
+}
+
+/** Xendit session states that are no longer payable and can be released
+ *  locally without calling cancel again. Covers both spellings of cancelled. */
+function isTerminalNonPayableStatus(status) {
+  const value = String(status || '').toUpperCase();
+  return value === 'EXPIRED' || value === 'CANCELED' || value === 'CANCELLED';
 }
 
 /** Coerces a Prisma Decimal / numeric string to a finite number. */
@@ -215,6 +226,7 @@ module.exports = {
   lockCitation,
   expiryTime,
   isUnpaidRow,
+  isTerminalNonPayableStatus,
   UNPAID_ROW_OR,
   sumPenalties,
   fineTotal,

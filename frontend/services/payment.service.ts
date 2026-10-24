@@ -12,10 +12,20 @@ export interface CheckoutSession {
   checkoutUrl: string;
   paymentSessionId: string;
   expiresAt?: string;
+  /** True when the backend returned an already-open session instead of creating one. */
+  resumed?: boolean;
 }
 
 export interface CheckoutStatus {
   settled: boolean;
+}
+
+export interface ActiveCheckout {
+  active: boolean;
+  settled?: boolean;
+  checkoutUrl?: string;
+  paymentSessionId?: string;
+  expiresAt?: string;
 }
 
 export const paymentService = {
@@ -29,6 +39,17 @@ export const paymentService = {
     );
     if (!res.data?.data?.checkoutUrl) throw new Error("Malformed checkout response");
     return res.data.data;
+  },
+  /**
+   * GET /payments/citations/:id/checkout (driver) — returns the unfinished
+   * session the backend already has for this citation, if any. This is a
+   * database read only (no Xendit call), safe to run on every page load.
+   */
+  getActiveCheckout: async (citationId: number | string): Promise<ActiveCheckout> => {
+    const res = await api.get<ApiEnvelope<ActiveCheckout>>(
+      `/payments/citations/${citationId}/checkout`
+    );
+    return res.data?.data ?? { active: false };
   },
   /**
    * GET /payments/citations/:id/status (driver) — re-verifies a pending

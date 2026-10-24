@@ -4,6 +4,7 @@ const path = require('path');
 const { generateCitationNumber } = require('../utils/citationNumber');
 const { notifyDriver } = require('../services/notificationService');
 const { logAdminAction } = require('../services/auditLogService');
+const paymentSessions = require('../services/paymentSessionService');
 const { success, fail } = require('../utils/response');
 const { getPagination } = require('../utils/pagination');
 
@@ -500,9 +501,13 @@ async function settleCitation(req, res, next) {
       settlementStatus: 'settled',
       settledAt: new Date(),
       receivedBy: req.user?.id || null,
+      paymentSessionStatus: 'expired',
+      paymentCheckoutUrl: null,
+      paymentExpiresAt: null,
+      paymentAttemptKey: null,
+      paymentLockedAt: null,
     };
     if (paymentMethod) data.paymentMethod = paymentMethod;
-    if (paymentReference) data.paymentReference = String(paymentReference).trim() || null;
 
     // No FOR UPDATE in Prisma — the status filter on this conditional update
     // IS the lock: of two concurrent settles only the first one matches
@@ -542,12 +547,36 @@ async function settleCitation(req, res, next) {
       return fail(res, 'Warnings cannot be settled — no fine is due', 409);
     }
 
+    // The conditional update above is the state lock. A checkout that raced
+    // with this settlement may have stored its session reference just before
+    // the lock; cancel it now so the driver cannot pay both offline and
+    // online. Then replace the online reference with the administrator's
+    // OR/reference (or null when none was supplied).
+    const sessionReference = await prisma.citation.findUnique({
+      where: { citationId },
+      select: { paymentReference: true },
+    });
+    const onlineSessionClosed = sessionReference?.paymentReference
+      ? await paymentSessions.cancelSessionReference(sessionReference.paymentReference)
+      : true;
+    const finalReference = paymentReference ? String(paymentReference).trim() || null : null;
+    await prisma.citation.update({
+      where: { citationId },
+      data: { paymentReference: finalReference },
+    });
+
     const updated = await prisma.citation.findUnique({
       where: { citationId },
       include: citationInclude,
     });
     logAdminAction(req.user.id, 'settled_citation', 'citation', citationId, citation.citationNumber);
-    return success(res, serializeCitation(updated), 'Citation marked as settled');
+    return success(
+      res,
+      serializeCitation(updated),
+      onlineSessionClosed
+        ? 'Citation marked as settled'
+        : 'Citation marked as settled, but the online payment link could not be closed. Please check Xendit.'
+    );
   } catch (err) {
     next(err);
   }
@@ -575,9 +604,45 @@ async function cancelCitation(req, res, next) {
       return fail(res, 'Warnings cannot be cancelled', 409);
     }
 
+    // Conditional update is the state lock: it cannot cancel a citation that
+    // a concurrent settlement just paid. The session reference is left in
+    // place for the cancellation step below, then cleared.
+    const cancelled = await prisma.citation.updateMany({
+      where: { citationId, settlementStatus: 'pending' },
+      data: {
+        settlementStatus: 'cancelled',
+        paymentSessionStatus: 'expired',
+        paymentCheckoutUrl: null,
+        paymentExpiresAt: null,
+        paymentAttemptKey: null,
+        paymentLockedAt: null,
+      },
+    });
+    if (cancelled.count === 0) {
+      const current = await prisma.citation.findUnique({
+        where: { citationId },
+        select: { settlementStatus: true },
+      });
+      if (!current) return fail(res, 'Citation not found', 404);
+      if (current.settlementStatus === 'cancelled') {
+        return fail(res, 'This citation is already cancelled', 409);
+      }
+      if (current.settlementStatus === 'settled') {
+        return fail(res, 'Settled citations cannot be cancelled', 409);
+      }
+      return fail(res, 'Warnings cannot be cancelled', 409);
+    }
+
+    const sessionReference = await prisma.citation.findUnique({
+      where: { citationId },
+      select: { paymentReference: true },
+    });
+    const onlineSessionClosed = sessionReference?.paymentReference
+      ? await paymentSessions.cancelSessionReference(sessionReference.paymentReference)
+      : true;
     const updated = await prisma.citation.update({
       where: { citationId },
-      data: { settlementStatus: 'cancelled' },
+      data: { paymentReference: null },
     });
 
     await notifyDriver({
@@ -588,7 +653,13 @@ async function cancelCitation(req, res, next) {
     });
 
     logAdminAction(req.user.id, 'cancelled_citation', 'citation', citationId, citation.citationNumber);
-    return success(res, serializeCitation(updated), 'Citation cancelled');
+    return success(
+      res,
+      serializeCitation(updated),
+      onlineSessionClosed
+        ? 'Citation cancelled'
+        : 'Citation cancelled, but the online payment link could not be closed. Please check Xendit.'
+    );
   } catch (err) {
     next(err);
   }
@@ -635,9 +706,39 @@ async function resolveProtest(req, res, next) {
       return success(res, serializeCitation(updated), 'Protest dismissed');
     }
 
+    // Upholding a protest cancels the citation, so any unfinished online
+    // checkout must be invalidated as well. The conditional update prevents
+    // cancelling a citation that a concurrent settlement just paid.
+    const cancelled = await prisma.citation.updateMany({
+      where: { citationId, settlementStatus: 'pending' },
+      data: {
+        driverUnderProtest: false,
+        settlementStatus: 'cancelled',
+        paymentSessionStatus: 'expired',
+        paymentCheckoutUrl: null,
+        paymentExpiresAt: null,
+        paymentAttemptKey: null,
+        paymentLockedAt: null,
+      },
+    });
+    if (cancelled.count === 0) {
+      return fail(
+        res,
+        'Only unsettled citations can be cancelled through protest. Settled records stay settled.',
+        409
+      );
+    }
+
+    const sessionReference = await prisma.citation.findUnique({
+      where: { citationId },
+      select: { paymentReference: true },
+    });
+    const onlineSessionClosed = sessionReference?.paymentReference
+      ? await paymentSessions.cancelSessionReference(sessionReference.paymentReference)
+      : true;
     const updated = await prisma.citation.update({
       where: { citationId },
-      data: { driverUnderProtest: false, settlementStatus: 'cancelled' },
+      data: { paymentReference: null },
     });
     await notifyDriver({
       driverId: citation.driverId,
@@ -646,7 +747,13 @@ async function resolveProtest(req, res, next) {
       notificationType: 'follow_up',
     });
     logAdminAction(req.user.id, 'upheld_protest', 'citation', citationId, citation.citationNumber);
-    return success(res, serializeCitation(updated), 'Protest upheld — citation cancelled');
+    return success(
+      res,
+      serializeCitation(updated),
+      onlineSessionClosed
+        ? 'Protest upheld — citation cancelled'
+        : 'Protest upheld and citation cancelled, but the online payment link could not be closed. Please check Xendit.'
+    );
   } catch (err) {
     next(err);
   }

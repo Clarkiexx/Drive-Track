@@ -18,6 +18,13 @@ router.post(
 );
 
 router.get(
+  '/citations/:id/checkout',
+  authenticate,
+  allowRoles('driver'),
+  paymentController.getActiveCheckout
+);
+
+router.get(
   '/citations/:id/status',
   authenticate,
   allowRoles('driver'),

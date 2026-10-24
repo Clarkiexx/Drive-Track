@@ -59,6 +59,15 @@ type FineBoxProps = {
   action?: React.ReactNode;
   /** Amber note under the action, e.g. payment awaiting confirmation. */
   pendingNote?: string;
+  /* Optional partial-payment rollups (driver receipt only). When several
+   * violations have been settled against a still-pending citation, the
+   * remaining balance is promoted above the original total. Omitting all of
+   * them keeps the panel identical for legacy callers. */
+  paidAmount?: number;
+  remainingAmount?: number;
+  partiallyPaid?: boolean;
+  /** What the driver has ticked for the next payment, if a list is present. */
+  paySelection?: { amount: number; count: number } | null;
   className?: string;
 };
 
@@ -75,16 +84,42 @@ export function FineBox({
   dueNote,
   action,
   pendingNote,
+  paidAmount,
+  remainingAmount,
+  partiallyPaid,
+  paySelection,
   className = "",
 }: FineBoxProps) {
   const overdue = status === "pending";
+  const showPartial =
+    status === "pending" &&
+    partiallyPaid === true &&
+    typeof remainingAmount === "number" &&
+    remainingAmount > 0;
 
   return (
     <div className={`mb-3.5 rounded-[10px] bg-brand-soft p-3.5 text-center ${className}`}>
-      <p className="text-[12px] text-muted">Total Fine</p>
-      <p className="tabular font-display mt-0.5 text-[22px] leading-tight font-bold text-brand-700">
-        {formatPeso(fineAmount)}
-      </p>
+      {showPartial ? (
+        <>
+          <p className="text-[12px] leading-snug text-muted">
+            Total Fine {formatPeso(fineAmount)}
+            {typeof paidAmount === "number" ? ` — paid so far ${formatPeso(paidAmount)}` : ""}
+          </p>
+          <p className="mt-2 text-[11px] uppercase tracking-wide text-muted">
+            Remaining Balance
+          </p>
+          <p className="tabular font-display mt-0.5 text-[22px] leading-tight font-bold text-signal-hold">
+            {formatPeso(remainingAmount)}
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-[12px] text-muted">Total Fine</p>
+          <p className="tabular font-display mt-0.5 text-[22px] leading-tight font-bold text-brand-700">
+            {formatPeso(fineAmount)}
+          </p>
+        </>
+      )}
       <p
         className={`mt-1 text-[12px] font-semibold ${
           overdue ? "text-signal-hold" : status === "settled" ? "text-go-ink" : "text-ink"
@@ -95,6 +130,16 @@ export function FineBox({
 
       {status === "pending" && dueNote ? (
         <p className="mt-1 text-[12px] font-semibold leading-snug text-muted">{dueNote}</p>
+      ) : null}
+
+      {status === "pending" && paySelection ? (
+        <p className="mt-1.5 text-[12px] font-semibold leading-snug text-brand-700">
+          {paySelection.count === 0
+            ? "No violations selected"
+            : `Selected: ${formatPeso(paySelection.amount)} — ${paySelection.count} ${
+                paySelection.count === 1 ? "violation" : "violations"
+              }`}
+        </p>
       ) : null}
 
       {status === "settled" && paymentMethod ? (

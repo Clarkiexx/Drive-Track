@@ -1,4 +1,11 @@
-import { Ban, CircleCheckBig, Clock, TriangleAlert, type LucideIcon } from "lucide-react";
+import {
+  Ban,
+  CircleCheckBig,
+  Clock,
+  Coins,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 
 import type { SettlementStatus } from "@/constants/violations";
 
@@ -43,6 +50,28 @@ export default function StatusChip({ status, className = "" }: StatusChipProps) 
     >
       <Icon size={11} strokeWidth={2.6} aria-hidden />
       {label}
+    </span>
+  );
+}
+
+/* --- Partial payments --------------------------------------------------- */
+
+type PartialStatusChipProps = {
+  className?: string;
+};
+
+/**
+ * Badge for a citation whose some-but-not-all violations are settled. Reads as
+ * a middle state between the amber "Unsettled" and green "Settled" pills:
+ * brand-soft fill, brand ink, coin icon.
+ */
+export function PartialStatusChip({ className = "" }: PartialStatusChipProps) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-soft px-2.5 py-[3px] text-[11px] leading-tight font-bold text-brand-700 ${className}`}
+    >
+      <Coins size={11} strokeWidth={2.6} aria-hidden />
+      Partially paid
     </span>
   );
 }

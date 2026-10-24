@@ -6,7 +6,7 @@ import { Banknote, RotateCw, Search } from "lucide-react";
 import EmptyState from "@/components/common/EmptyState";
 import FormField from "@/components/common/FormField";
 import NoticeBox from "@/components/common/NoticeBox";
-import StatusChip from "@/components/common/StatusChip";
+import StatusChip, { PartialStatusChip } from "@/components/common/StatusChip";
 import {
   dueInfo,
   formatPeso,
@@ -48,6 +48,36 @@ function statusForTab(tab: SettlementTab): string | undefined {
 function toNumber(value: string | number | null | undefined): number {
   const parsed = typeof value === "number" ? value : Number.parseFloat(value ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Partial-payment rollup for one citation. Trusts the backend's
+ * remainingAmount; falls back to deriving it from paidAmount for legacy rows
+ * that only carry the header fine.
+ */
+function partialAmounts(citation: CitationRecord): {
+  total: number;
+  paid: number;
+  remaining: number;
+} {
+  const total = toNumber(citation.fineAmount);
+  const paid = typeof citation.paidAmount === "number" ? Math.max(citation.paidAmount, 0) : 0;
+  const remaining =
+    typeof citation.remainingAmount === "number"
+      ? Math.max(citation.remainingAmount, 0)
+      : Math.max(total - paid, 0);
+  return { total, paid, remaining };
+}
+
+/**
+ * Whether money has touched this citation without it being fully settled.
+ * Fully unsettled and fully settled records are untouched by this.
+ */
+function isPartiallyPaid(citation: CitationRecord): boolean {
+  return (
+    citation.partiallyPaid === true ||
+    (citation.settlementStatus === "pending" && toNumber(citation.paidAmount) > 0)
+  );
 }
 
 export default function AdminSettlementsPage() {
@@ -154,17 +184,33 @@ export default function AdminSettlementsPage() {
   }
 
   function handleExportCsv() {
-    const header = ["Citation No", "Driver", "Amount", "Due Date", "Status", "Payment Method", "Reference", "Settled At"];
-    const rows = citations.map((c) => [
-      c.citationNumber,
-      c.driver ? `${c.driver.firstName} ${c.driver.lastName}`.trim() : "",
-      String(toNumber(c.fineAmount)),
-      c.dueDate || "",
-      c.settlementStatus,
-      c.paymentMethod || "",
-      c.paymentReference || "",
-      c.settledAt || "",
-    ]);
+    // Amount = what is still owed for pending citations (the `remaining` figure
+    // the office would settle against); Total Fine keeps the original amount.
+    const header = [
+      "Citation No",
+      "Driver",
+      "Amount Remaining",
+      "Total Fine",
+      "Due Date",
+      "Status",
+      "Payment Method",
+      "Reference",
+      "Settled At",
+    ];
+    const rows = citations.map((c) => {
+      const outstanding = c.settlementStatus === "pending" ? partialAmounts(c).remaining : null;
+      return [
+        c.citationNumber,
+        c.driver ? `${c.driver.firstName} ${c.driver.lastName}`.trim() : "",
+        String(outstanding ?? toNumber(c.fineAmount)),
+        String(toNumber(c.fineAmount)),
+        c.dueDate || "",
+        c.settlementStatus,
+        c.paymentMethod || "",
+        c.paymentReference || "",
+        c.settledAt || "",
+      ];
+    });
     const csv = [header, ...rows]
       .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
       .join("\n");
@@ -363,8 +409,30 @@ export default function AdminSettlementsPage() {
                             ? `${citation.driver.firstName} ${citation.driver.lastName}`
                             : "—"}
                         </td>
-                        <td className="tabular-nums px-5 py-3.5 text-right align-top text-[13px] font-bold text-ink">
-                          {formatPeso(toNumber(citation.fineAmount))}
+                        <td className="px-5 py-3.5 text-right align-top">
+                          {(() => {
+                            const partial =
+                              citation.settlementStatus === "pending" && isPartiallyPaid(citation)
+                                ? partialAmounts(citation)
+                                : null;
+                            if (partial) {
+                              return (
+                                <div className="flex flex-col items-end">
+                                  <span className="tabular-nums text-[13px] font-bold text-ink">
+                                    {formatPeso(partial.remaining)} remaining
+                                  </span>
+                                  <span className="tabular-nums mt-0.5 text-[11px] leading-tight font-medium text-console-muted">
+                                    {formatPeso(partial.total)} total
+                                  </span>
+                                </div>
+                              );
+                            }
+                            return (
+                              <span className="tabular-nums text-[13px] font-bold text-ink">
+                                {formatPeso(toNumber(citation.fineAmount))}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-5 py-3.5 align-top text-[13px]">
                           {due ? (
@@ -389,7 +457,11 @@ export default function AdminSettlementsPage() {
                             : "—"}
                         </td>
                         <td className="px-5 py-3.5 align-top">
-                          <StatusChip status={citation.settlementStatus} />
+                          {isPartiallyPaid(citation) ? (
+                            <PartialStatusChip />
+                          ) : (
+                            <StatusChip status={citation.settlementStatus} />
+                          )}
                         </td>
                         <td className="px-5 py-3.5 align-top">
                           <div className="flex flex-wrap gap-1.5">
@@ -557,7 +629,7 @@ function MarkPaidDialog({
     event.preventDefault();
     setError("");
     // Office payment discipline (mirrors admin-dashboard Settlements):
-    // full amount only, OR/reference required — partial payments unsupported.
+    // OR/reference required — the backend settles the outstanding balance.
     if (!reference.trim()) {
       setError("Official Receipt / OR number is required for office payments.");
       return;
@@ -570,6 +642,11 @@ function MarkPaidDialog({
       setIsSubmitting(false);
     }
   }
+
+  const isPartial = isPartiallyPaid(citation) && citation.settlementStatus === "pending";
+  const partial = partialAmounts(citation);
+  // Settle against what is actually outstanding, not the original total.
+  const due = isPartial ? partial.remaining : Number(citation.fineAmount) || 0;
 
   return (
     <div
@@ -586,16 +663,29 @@ function MarkPaidDialog({
         <h4 className="font-display text-[15px] font-semibold tracking-tight text-ink">
           Record office payment — {citation.citationNumber}
         </h4>
-        <p className="mt-1.5 text-[13px] text-ink/80">
-          Amount due (full payment only):{" "}
-          <strong className="tabular-nums">
-            {formatPeso(Number(citation.fineAmount) || 0)}
-          </strong>
-        </p>
-        <p className="mt-0.5 text-[12px] text-console-muted">
-          Partial payments are not supported — the full citation amount is recorded
-          as paid.
-        </p>
+        {isPartial ? (
+          <>
+            <p className="mt-1.5 text-[13px] text-ink/80">
+              Remaining balance:{" "}
+              <strong className="tabular-nums">{formatPeso(due)}</strong>
+            </p>
+            <p className="mt-0.5 text-[12px] text-console-muted">
+              {formatPeso(partial.paid)} already paid of {formatPeso(partial.total)} total.
+              Confirming records the remaining balance as settled — not the total fine.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-1.5 text-[13px] text-ink/80">
+              Amount due (full payment only):{" "}
+              <strong className="tabular-nums">{formatPeso(due)}</strong>
+            </p>
+            <p className="mt-0.5 text-[12px] text-console-muted">
+              Partial payments are not supported — the full citation amount is recorded
+              as paid.
+            </p>
+          </>
+        )}
 
         <form onSubmit={handleSubmit} className="mt-3 space-y-3">
           <div>

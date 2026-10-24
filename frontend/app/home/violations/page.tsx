@@ -199,6 +199,9 @@ export default function MyViolationsPage() {
                       placeOfViolation={violation.placeOfViolation}
                       fineAmount={violation.fineAmount}
                       dueDate={violation.dueDate}
+                      paidAmount={violation.paidAmount}
+                      remainingAmount={violation.remainingAmount}
+                      partiallyPaid={violation.partiallyPaid}
                     />
                   </li>
                 ))}

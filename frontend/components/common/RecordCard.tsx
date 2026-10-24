@@ -6,7 +6,7 @@ import { CalendarDays, ChevronRight, Clock, MapPin, ScrollText, TriangleAlert } 
 import type { RecordType, SettlementStatus } from "@/constants/violations";
 import { dueInfo, formatPeso, formatShortDate, formatShortDateManila, type DueUrgency } from "./dates";
 import useClientNow from "./useClientNow";
-import StatusChip from "./StatusChip";
+import StatusChip, { PartialStatusChip } from "./StatusChip";
 
 type DueLineProps = {
   dueDate: string | number | Date;
@@ -62,6 +62,15 @@ export type RecordCardProps = {
   placeOfViolation: string;
   fineAmount?: string | number | null;
   dueDate?: string | number | Date | null;
+  /**
+   * Partial-payment rollup from the backend (paidAmount / remainingAmount /
+   * partiallyPaid). Absent on legacy citations — the card then renders exactly
+   * as before. While anything is still outstanding the citation stays
+   * `pending`, so the due-date escalation below keeps applying.
+   */
+  paidAmount?: number;
+  remainingAmount?: number;
+  partiallyPaid?: boolean;
   /** Makes the whole card a link. */
   href?: string;
   /** Trailing link label on the card footer. Defaults to "View Receipt". */
@@ -82,10 +91,25 @@ export default function RecordCard({
   placeOfViolation,
   fineAmount,
   dueDate,
+  paidAmount,
+  remainingAmount,
+  partiallyPaid,
   href,
   footerLink = "View Receipt",
 }: RecordCardProps) {
   const isWarning = recordType === "warning";
+
+  // A partial citation is still `pending` — it just has money against it. Trust
+  // the backend's partiallyPaid flag; fall back to deriving it from paidAmount
+  // for records where only the rollup amounts are populated.
+  const totalFine = Math.max(Number(fineAmount ?? 0) || 0, 0);
+  const paid = typeof paidAmount === "number" ? Math.max(paidAmount, 0) : 0;
+  const remaining =
+    typeof remainingAmount === "number"
+      ? Math.max(remainingAmount, 0)
+      : Math.max(totalFine - paid, 0);
+  const isPartial =
+    (partiallyPaid === true || paid > 0) && status === "pending" && remaining > 0;
 
   const body = (
     <>
@@ -105,7 +129,7 @@ export default function RecordCard({
           <p className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-muted">{title}</p>
         </div>
 
-        <StatusChip status={status} />
+        {isPartial ? <PartialStatusChip /> : <StatusChip status={status} />}
       </div>
 
       <p className="mt-2.5 flex items-center gap-1.5 text-[12px] text-muted">
@@ -123,9 +147,16 @@ export default function RecordCard({
         {isWarning ? (
           <span className="text-[13px] font-bold text-signal-hold">Warning</span>
         ) : (
-          <span className="tabular font-display text-[15px] font-bold text-ink">
-            {formatPeso(fineAmount ?? 0)}
-          </span>
+          <div className="min-w-0">
+            <span className="tabular block font-display text-[15px] leading-tight font-bold text-ink">
+              {formatPeso(totalFine)}
+            </span>
+            {isPartial ? (
+              <span className="tabular mt-0.5 block text-[11px] leading-tight font-semibold text-brand-700">
+                {formatPeso(remaining)} remaining of {formatPeso(totalFine)}
+              </span>
+            ) : null}
+          </div>
         )}
         <span className="flex shrink-0 items-center gap-0.5 text-[12px] font-semibold text-brand-500">
           {footerLink}

@@ -17,6 +17,13 @@ router.post(
   paymentController.createCheckout
 );
 
+router.post(
+  '/citations/:id/checkout/cancel',
+  authenticate,
+  allowRoles('driver'),
+  paymentController.cancelCheckout
+);
+
 router.get(
   '/citations/:id/checkout',
   authenticate,

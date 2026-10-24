@@ -75,6 +75,31 @@ function parseCitationIdFromReference(referenceId) {
   return match ? Number(match[1]) : null;
 }
 
+/**
+ * Turns the configured success/cancel URL into a citation-specific return URL.
+ * The configured value may be:
+ *   - /home/violations?payment=success  -> /home/violations/<id>?payment=success
+ *   - /payment-return?payment=success  -> left as-is (custom page)
+ *   - any URL containing {citationId}  -> placeholder replaced
+ * Keeping this in the service means every new checkout returns the driver to
+ * the receipt, where the "Back to My Violations" button lives.
+ */
+function buildReturnUrl(rawUrl, citationId, paymentStatus) {
+  if (!rawUrl) return undefined;
+
+  const withId = String(rawUrl).replace(/\{citationId\}/g, String(citationId));
+  try {
+    const url = new URL(withId);
+    if (/\/home\/violations\/?$/.test(url.pathname)) {
+      url.pathname = `/home/violations/${citationId}`;
+    }
+    url.searchParams.set('payment', paymentStatus);
+    return url.toString();
+  } catch {
+    return withId;
+  }
+}
+
 function allowedChannels() {
   const raw = (process.env.XENDIT_ALLOWED_CHANNELS || '').trim();
   if (!raw) return undefined; // omit → Xendit offers all enabled channels
@@ -99,8 +124,16 @@ async function createPaymentSession({ citationId, citationNumber, amount, idempo
     expires_at: expiresAt,
     description: `DriveTrack citation ${citationNumber}`,
     metadata: { citationId: String(citationId), citationNumber },
-    success_return_url: process.env.XENDIT_SUCCESS_RETURN_URL,
-    cancel_return_url: process.env.XENDIT_CANCEL_RETURN_URL,
+    success_return_url: buildReturnUrl(
+      process.env.XENDIT_SUCCESS_RETURN_URL,
+      citationId,
+      'success'
+    ),
+    cancel_return_url: buildReturnUrl(
+      process.env.XENDIT_CANCEL_RETURN_URL,
+      citationId,
+      'cancelled'
+    ),
   };
   const channels = allowedChannels();
   if (channels && channels.length > 0) body.allowed_payment_channels = channels;
@@ -146,6 +179,7 @@ module.exports = {
   isConfigured,
   buildReferenceId,
   parseCitationIdFromReference,
+  buildReturnUrl,
   createPaymentSession,
   getPaymentSession,
   getPayment,

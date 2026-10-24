@@ -1,7 +1,8 @@
 "use client";
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
-import { RotateCw } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeft, RotateCw } from "lucide-react";
 
 import AppBar from "@/components/common/AppBar";
 import NoticeBox from "@/components/common/NoticeBox";
@@ -91,6 +92,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   const [payError, setPayError] = useState("");
   const [payNotice, setPayNotice] = useState("");
   const [sessionOpened, setSessionOpened] = useState(false);
+  const [paymentReturn, setPaymentReturn] = useState<"success" | "cancelled" | null>(null);
   /**
    * The live Xendit checkout for this citation. Reused while unexpired so
    * repeat taps re-open the SAME link instead of spawning duplicate tabs.
@@ -104,6 +106,8 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   /** Synchronous guard: React state updates are async, so double taps could
    *  otherwise start two checkout requests before `isPaying` renders. */
   const payingRef = useRef(false);
+  /** One authoritative status check when Xendit sends the driver back. */
+  const returnReconcileRef = useRef(false);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -156,9 +160,42 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   useEffect(() => {
     // Deferred rather than run in the effect body: the token only exists in the
     // browser, and this keeps the first render identical on both sides.
-    const timer = window.setTimeout(load, 0);
+    const timer = window.setTimeout(() => {
+      const status = new URLSearchParams(window.location.search).get("payment");
+      if (status === "success" || status === "cancelled") setPaymentReturn(status);
+      void load();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+
+  useEffect(() => {
+    // Returning from Xendit with ?payment=success means the webhook may still
+    // be in flight. Render the receipt first, then ask the status endpoint once
+    // so a completed payment flips to Settled without a manual refresh. This
+    // is deliberately non-blocking: a slow Xendit must not hide the receipt.
+    if (
+      paymentReturn !== "success" ||
+      !citation ||
+      citation.settlementStatus !== "pending" ||
+      isLoading ||
+      returnReconcileRef.current
+    ) {
+      return;
+    }
+    returnReconcileRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const status = await paymentService.getStatus(id);
+        if (!cancelled && status.settled) await load();
+      } catch {
+        // The webhook or the refresh button remains authoritative.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentReturn, citation, id, isLoading, load]);
 
   useEffect(() => {
     // The driver coming back from hosted checkout regains tab focus here.
@@ -375,6 +412,33 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
               <NoticeBox tone="danger" className="mt-4 text-[13px]">
                 {errorMessage}
               </NoticeBox>
+            ) : null}
+            {paymentReturn ? (
+              <div className="mt-4 space-y-3">
+                <NoticeBox
+                  tone={
+                    citation.settlementStatus === "settled"
+                      ? "success"
+                      : paymentReturn === "success"
+                        ? "info"
+                        : "warn"
+                  }
+                  className="text-[13px]"
+                >
+                  {citation.settlementStatus === "settled"
+                    ? "Payment confirmed. This citation is settled."
+                    : paymentReturn === "success"
+                      ? "Payment submitted. We're confirming it with Xendit; the status below updates automatically."
+                      : "Payment cancelled. No payment was taken; this citation is still pending."}
+                </NoticeBox>
+                <Link
+                  href="/home/violations"
+                  className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-hairline bg-surface py-3 text-[14px] font-semibold text-ink transition-colors hover:bg-surface-sunken"
+                >
+                  <ArrowLeft size={16} strokeWidth={2.2} aria-hidden />
+                  Back to My Violations
+                </Link>
+              </div>
             ) : null}
             <Receipt
               citation={citation}

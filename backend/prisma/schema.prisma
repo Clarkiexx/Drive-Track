@@ -53,6 +53,17 @@ enum PaymentMethod {
   other
 }
 
+// Lifecycle of the one online checkout session a citation may have at a time.
+// `creating` is a short-lived database claim that prevents two concurrent
+// Pay-Now requests from creating two Xendit sessions.
+enum PaymentSessionStatus {
+  creating
+  pending
+  completed
+  expired
+  failed
+}
+
 enum VerificationStatus {
   pending
   verified
@@ -231,6 +242,15 @@ model Citation {
   fineOverrideReason String?          @map("fine_override_reason") @db.VarChar(255)
   paymentMethod      PaymentMethod?   @map("payment_method")
   paymentReference   String?          @map("payment_reference") @db.VarChar(255)
+  // Online checkout session metadata. Persisting the hosted URL and expiry
+  // lets every device retrieve the same unfinished session instead of
+  // creating a second Xendit payment. `paymentLockedAt` is the short-lived
+  // claim that serialises concurrent checkout requests.
+  paymentCheckoutUrl   String?               @map("payment_checkout_url") @db.Text
+  paymentExpiresAt     DateTime?             @map("payment_expires_at") @db.Timestamptz(3)
+  paymentSessionStatus PaymentSessionStatus? @map("payment_session_status")
+  paymentAttemptKey    String?               @map("payment_attempt_key") @db.VarChar(255)
+  paymentLockedAt      DateTime?             @map("payment_locked_at") @db.Timestamptz(3)
   // Dangling int in the dump — no FK, therefore NO relation.
   receivedBy         Int?             @map("received_by")
 

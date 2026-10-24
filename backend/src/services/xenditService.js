@@ -11,6 +11,13 @@
 
 const API_BASE = (process.env.XENDIT_API_URL || 'https://api.xendit.co').replace(/\/+$/, '');
 
+/**
+ * A hung Xendit request must not hold the citation's creation claim forever.
+ * Node 18+ provides AbortSignal.timeout(); the caller marks the claim failed
+ * when this rejects.
+ */
+const REQUEST_TIMEOUT_MS = 20 * 1000;
+
 function isConfigured() {
   return Boolean(process.env.XENDIT_SECRET_KEY);
 }
@@ -22,6 +29,10 @@ function authHeader() {
 }
 
 async function xenditFetch(path, { method = 'GET', body, headers = {} } = {}) {
+  const timeoutSignal =
+    typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      : undefined;
   const response = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
@@ -30,6 +41,7 @@ async function xenditFetch(path, { method = 'GET', body, headers = {} } = {}) {
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
+    signal: timeoutSignal,
   });
   let payload = null;
   try {
@@ -73,7 +85,7 @@ function allowedChannels() {
  * Creates a PAY / PAYMENT_LINK hosted-checkout session for a citation.
  * Amount MUST be the server-side citation fineAmount (integer pesos).
  */
-async function createPaymentSession({ citationId, citationNumber, amount }) {
+async function createPaymentSession({ citationId, citationNumber, amount, idempotencyKey }) {
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
   const body = {
     reference_id: buildReferenceId(citationId),
@@ -92,7 +104,12 @@ async function createPaymentSession({ citationId, citationNumber, amount }) {
   };
   const channels = allowedChannels();
   if (channels && channels.length > 0) body.allowed_payment_channels = channels;
-  return xenditFetch('/sessions', { method: 'POST', body });
+  // Xendit supports idempotency keys on POST endpoints. Passing the claim's
+  // attempt key means a retried request that lost the HTTP response cannot
+  // create a second session. If the Sessions API ignores the header, the
+  // database claim still guarantees a single active session.
+  const headers = idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {};
+  return xenditFetch('/sessions', { method: 'POST', body, headers });
 }
 
 /** Authoritative session-status lookup used by webhook verification (4.2). */
@@ -112,6 +129,19 @@ async function getPayment(paymentId) {
   });
 }
 
+/**
+ * Cancels an ACTIVE hosted-checkout session, invalidating its payment link.
+ * Used when a citation is settled offline or cancelled by an administrator,
+ * so a driver cannot pay an online session for a citation that is already
+ * settled. Best-effort: the caller decides whether failure is fatal.
+ */
+async function cancelPaymentSession(paymentSessionId) {
+  if (!paymentSessionId) return null;
+  return xenditFetch(`/sessions/${encodeURIComponent(paymentSessionId)}/cancel`, {
+    method: 'POST',
+  });
+}
+
 module.exports = {
   isConfigured,
   buildReferenceId,
@@ -119,4 +149,5 @@ module.exports = {
   createPaymentSession,
   getPaymentSession,
   getPayment,
+  cancelPaymentSession,
 };

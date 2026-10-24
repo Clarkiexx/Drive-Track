@@ -65,6 +65,22 @@ function writeStoredCheckout(citationId: string | number, checkout: StoredChecko
   }
 }
 
+/** Drops a finished/stale checkout so it can never be re-opened. */
+function removeStoredCheckout(citationId: string | number) {
+  try {
+    window.localStorage.removeItem(`${CHECKOUT_STORAGE_PREFIX}${citationId}`);
+  } catch {
+    // Storage unavailable (private mode) — in-memory state is enough.
+  }
+}
+
+/** True when the backend says another request is already creating the session. */
+function isSessionBeingCreated(error: unknown): boolean {
+  if (!axios.isAxiosError(error) || error.response?.status !== 409) return false;
+  const message = (error.response.data as { message?: unknown } | undefined)?.message;
+  return typeof message === "string" && message.toLowerCase().includes("already being created");
+}
+
 export default function ViolationDetailPage({ params }: ViolationDetailPageProps) {
   const { id } = use(params);
 
@@ -73,6 +89,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   const [errorMessage, setErrorMessage] = useState("");
   const [isPaying, setIsPaying] = useState(false);
   const [payError, setPayError] = useState("");
+  const [payNotice, setPayNotice] = useState("");
   const [sessionOpened, setSessionOpened] = useState(false);
   /**
    * The live Xendit checkout for this citation. Reused while unexpired so
@@ -84,6 +101,9 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
    * still open we focus it instead of opening another tab.
    */
   const checkoutTabRef = useRef<Window | null>(null);
+  /** Synchronous guard: React state updates are async, so double taps could
+   *  otherwise start two checkout requests before `isPaying` renders. */
+  const payingRef = useRef(false);
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -95,18 +115,36 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       if (record.settlementStatus !== "pending") {
         // Settled/cancelled: the stored link is done — drop it so a stale
         // URL can never be re-opened.
-        try {
-          window.localStorage.removeItem(`${CHECKOUT_STORAGE_PREFIX}${id}`);
-        } catch {
-          // Storage unavailable (private mode) — in-memory state is enough.
-        }
+        removeStoredCheckout(id);
         checkoutTabRef.current = null;
         setActiveCheckout(null);
         setSessionOpened(false);
+        setPayNotice("");
       } else {
-        // Rehydrate the live session so a refresh or revisit reuses the same
-        // Xendit link instead of spawning a duplicate tab.
-        setActiveCheckout(readStoredCheckout(id));
+        // The server is the source of truth for an unfinished session. This
+        // survives a cleared localStorage, a different device, or a slow
+        // network that lost the original response. localStorage remains a
+        // fallback only when the server cannot be reached.
+        let serverReachable = false;
+        let serverCheckout: StoredCheckout | null = null;
+        try {
+          const active = await paymentService.getActiveCheckout(id);
+          serverReachable = true;
+          if (active.active && active.checkoutUrl && active.expiresAt) {
+            const parsed = Date.parse(active.expiresAt);
+            if (Number.isFinite(parsed) && parsed > Date.now()) {
+              serverCheckout = { url: active.checkoutUrl, expiresAt: parsed };
+            }
+          }
+        } catch {
+          // Slow/offline — fall back to the locally stored link below.
+        }
+
+        const stored = readStoredCheckout(id);
+        const next = serverReachable ? serverCheckout : stored;
+        setActiveCheckout(next);
+        if (next) writeStoredCheckout(id, next);
+        else removeStoredCheckout(id);
       }
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error, "Unable to load this record."));
@@ -204,22 +242,38 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   }
 
   async function handlePayNow() {
-    if (isPaying) return;
+    if (payingRef.current || isPaying) return;
 
-    // One Xendit link per citation: while the stored session is still live
-    // (backend expiry is 30 minutes, persisted across reloads), re-open it
-    // instead of creating another.
-    if (activeCheckout && activeCheckout.expiresAt > Date.now()) {
-      openCheckout(activeCheckout.url, true);
-      return;
+    // The cached link is only a fallback for a server/network failure. Every
+    // normal tap asks the backend first: it is the authority on whether the
+    // citation is still payable and whether an unfinished session exists.
+    const storedFallback =
+      activeCheckout && activeCheckout.expiresAt > Date.now() ? activeCheckout : null;
+    if (activeCheckout && !storedFallback) {
+      setActiveCheckout(null);
+      removeStoredCheckout(id);
     }
-    if (activeCheckout) setActiveCheckout(null);
 
+    payingRef.current = true;
     setIsPaying(true);
     setPayError("");
+    setPayNotice("");
+
+    const startCheckout = async () => {
+      try {
+        return await paymentService.createCheckout(id);
+      } catch (error) {
+        if (!isSessionBeingCreated(error)) throw error;
+        // Another tab/device won the creation race. Wait for it to persist
+        // its session, then retrieve that same session instead of creating
+        // a second one. One retry only.
+        await new Promise((resolve) => window.setTimeout(resolve, 1800));
+        return paymentService.createCheckout(id);
+      }
+    };
 
     try {
-      const { checkoutUrl, expiresAt } = await paymentService.createCheckout(id);
+      const { checkoutUrl, expiresAt, resumed } = await startCheckout();
 
       // Hosted Xendit checkout, replacing expo-web-browser's
       // openBrowserAsync. Returning from the tab never settles anything on its
@@ -232,19 +286,43 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
       };
       setActiveCheckout(checkout);
       writeStoredCheckout(id, checkout);
-      openCheckout(checkoutUrl, false);
+      if (resumed) {
+        setPayNotice("Resumed your unfinished payment — no new payment was created.");
+      }
+      const reuseExistingTab = Boolean(
+        resumed && checkoutTabRef.current && !checkoutTabRef.current.closed
+      );
+      openCheckout(checkoutUrl, reuseExistingTab);
 
       setSessionOpened(true);
     } catch (error) {
+      // If the backend is unreachable or temporarily failing, the already
+      // issued Xendit link is still the best available option. Never fall
+      // back on a 4xx (settled/cancelled/unauthorized): those mean the link
+      // must not be used.
+      const serverUnavailable =
+        !axios.isAxiosError(error) ||
+        !error.response ||
+        error.response.status >= 500;
+      if (storedFallback && serverUnavailable) {
+        setSessionOpened(true);
+        setPayNotice("Could not reach the server. Opening your saved payment session.");
+        openCheckout(
+          storedFallback.url,
+          Boolean(checkoutTabRef.current && !checkoutTabRef.current.closed)
+        );
+        return;
+      }
       setPayError(
         isPaymentsUnconfigured(error)
           ? ONLINE_PAYMENTS_UNCONFIGURED_MESSAGE
           : getApiErrorMessage(error, "Unable to start payment.")
       );
     } finally {
+      payingRef.current = false;
       setIsPaying(false);
-      // RN reloaded here too, so a payment that completed in the checkout tab
-      // is reflected as soon as the driver comes back.
+      // Reload so a session created by a concurrent request (or a payment
+      // completed in the checkout tab) is reflected immediately.
       void load();
     }
   }
@@ -302,6 +380,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
               citation={citation}
               isPaying={isPaying}
               payError={payError}
+              payNotice={payNotice}
               canResume={Boolean(activeCheckout)}
               awaitingConfirmation={
                 sessionOpened && citation.settlementStatus === "pending" && !isPaying && !payError
@@ -319,13 +398,22 @@ type ReceiptProps = {
   citation: CitationRecord;
   isPaying: boolean;
   payError: string;
+  payNotice: string;
   canResume: boolean;
   awaitingConfirmation: boolean;
   onPay: () => void;
 };
 
 /** The receipt card, laid out in the same order as ViolationDetailScreen. */
-function Receipt({ citation, isPaying, payError, canResume, awaitingConfirmation, onPay }: ReceiptProps) {
+function Receipt({
+  citation,
+  isPaying,
+  payError,
+  payNotice,
+  canResume,
+  awaitingConfirmation,
+  onPay,
+}: ReceiptProps) {
   const violationDescriptions = (citation.violations ?? [])
     .map((entry) => entry.violationType?.description)
     .filter((description): description is string => Boolean(description));
@@ -376,6 +464,16 @@ function Receipt({ citation, isPaying, payError, canResume, awaitingConfirmation
           action={
             citation.settlementStatus === "pending" ? (
               <div className="space-y-2">
+                {canResume && !payNotice ? (
+                  <p className="text-[11px] leading-snug text-center text-muted">
+                    Your previous payment session is still open and will be reused.
+                  </p>
+                ) : null}
+                {payNotice ? (
+                  <NoticeBox tone="info" className="text-left">
+                    {payNotice}
+                  </NoticeBox>
+                ) : null}
                 <button
                   type="button"
                   onClick={onPay}

@@ -82,15 +82,19 @@ function parseId(value) {
  *  consistently. */
 function serializeCitation(citation) {
   if (!citation) return citation;
-  const violations = (citation.violations || []).map((row) =>
-    paymentSessions.mapViolationForDisplay(row, citation)
-  );
-  return {
+  const result = {
     ...citation,
-    violations,
     dueDate: citation.dueDate ? toDateOnlyString(citation.dueDate) : citation.dueDate,
     ...paymentSessions.derivePaymentState(citation),
   };
+  // Only replace the rows when the caller actually loaded them; endpoints
+  // that select a bare citation must not gain a spurious `violations: []`.
+  if (Array.isArray(citation.violations)) {
+    result.violations = citation.violations.map((row) =>
+      paymentSessions.mapViolationForDisplay(row, citation)
+    );
+  }
+  return result;
 }
 
 /** Any row that has been settled, or that carries a payment reference. */
@@ -181,7 +185,7 @@ async function reconcileOnlineSession(citation) {
           };
         }
       }
-    } else if (session && session.status !== 'EXPIRED') {
+    } else if (session && !paymentSessions.isTerminalNonPayableStatus(session.status)) {
       return {
         action: 'conflict',
         status: 503,
@@ -194,7 +198,13 @@ async function reconcileOnlineSession(citation) {
     await paymentSessions.lockCitation(tx, citation.citationId);
 
     const updated = await tx.citation.updateMany({
-      where: { citationId: citation.citationId, settlementStatus: 'pending' },
+      // Only clear the session that was verified above. A newer session
+      // stored concurrently makes this match 0 and the caller aborts.
+      where: {
+        citationId: citation.citationId,
+        settlementStatus: 'pending',
+        paymentReference: reference ?? null,
+      },
       data: {
         paymentReference: null,
         paymentSessionStatus: 'expired',
@@ -635,10 +645,17 @@ async function overrideFineAmount(req, res, next) {
           throw new AdminConflictError(paymentConflictMessage);
         }
 
-        await tx.citation.update({
-          where: { citationId },
+        // Conditional on the row we just read: a concurrent checkout claim
+        // (which sets `creating` and bumps updatedAt outside the advisory
+        // lock) must invalidate this stale read rather than let a Xendit
+        // session be created for the old amount.
+        const citationUpdated = await tx.citation.updateMany({
+          where: { citationId, settlementStatus: 'pending', updatedAt: fresh.updatedAt },
           data: { fineAmount: newTotal, fineOverrideReason: overrideReason },
         });
+        if (citationUpdated.count !== 1) {
+          throw new AdminConflictError(paymentConflictMessage);
+        }
 
         // Redistribute the rounded total over every row. Relative weights
         // come from the current penalties; a zero-weight citation splits
@@ -773,7 +790,9 @@ async function settleCitation(req, res, next) {
         }
 
         const updated = await tx.citation.updateMany({
-          where: { citationId, settlementStatus: 'pending' },
+          // A checkout claim after the fresh read bumps updatedAt and makes
+          // this fail closed instead of racing a new payable session.
+          where: { citationId, settlementStatus: 'pending', updatedAt: fresh.updatedAt },
           data: {
             settlementStatus: 'settled',
             settledAt,
@@ -890,7 +909,8 @@ async function cancelCitation(req, res, next) {
         }
 
         const updated = await tx.citation.updateMany({
-          where: { citationId, settlementStatus: 'pending' },
+          // Fail closed if a checkout claim landed after the fresh read.
+          where: { citationId, settlementStatus: 'pending', updatedAt: fresh.updatedAt },
           data: {
             settlementStatus: 'cancelled',
             paymentMethod: null,
@@ -1035,7 +1055,8 @@ async function resolveProtest(req, res, next) {
         }
 
         const updated = await tx.citation.updateMany({
-          where: { citationId, settlementStatus: 'pending' },
+          // Fail closed if a checkout claim landed after the fresh read.
+          where: { citationId, settlementStatus: 'pending', updatedAt: fresh.updatedAt },
           data: {
             driverUnderProtest: false,
             settlementStatus: 'cancelled',

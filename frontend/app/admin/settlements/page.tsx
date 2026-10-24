@@ -681,8 +681,8 @@ function MarkPaidDialog({
               <strong className="tabular-nums">{formatPeso(due)}</strong>
             </p>
             <p className="mt-0.5 text-[12px] text-console-muted">
-              Partial payments are not supported — the full citation amount is recorded
-              as paid.
+              Confirming records the full outstanding balance for this citation as
+              settled.
             </p>
           </>
         )}

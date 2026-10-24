@@ -62,8 +62,11 @@ function parseViolationIds(raw) {
 
 /**
  * Validates that every requested id belongs to this citation and is currently
- * payable: unpaid, not allocated to another session, and carrying a positive
- * penalty. Returns `{ selected }` or `{ error, status }`.
+ * payable: unpaid, not allocated to a *different* session, and carrying a
+ * positive penalty. Rows already allocated to the citation's own persisted
+ * session are allowed here — that is the resume case (the creation step still
+ * requires `paymentReference: null`, so it fails closed if they were not
+ * released).
  */
 function selectViolations(citation, ids) {
   const byId = new Map((citation.violations || []).map((row) => [row.id, row]));
@@ -76,7 +79,7 @@ function selectViolations(citation, ids) {
     if (!paymentSessions.isUnpaidRow(row)) {
       return { error: 'One or more selected violations are already settled.', status: 409 };
     }
-    if (row.paymentReference) {
+    if (row.paymentReference && row.paymentReference !== citation.paymentReference) {
       return { error: 'One or more selected violations are already part of another payment.', status: 409 };
     }
     if (Math.round(toNumber(row.penaltyAtIssuance)) <= 0) {
@@ -120,6 +123,7 @@ function resolveActiveRequest(citation, requestedIds, legacyRequest) {
     resumed: true,
     amount,
     violationIds: legacySession ? [] : allocated.map((row) => row.id),
+    legacy: legacySession,
   };
 }
 
@@ -132,7 +136,10 @@ async function clearStoredSession(citationId, reference) {
   return prisma.$transaction(async (tx) => {
     await paymentSessions.lockCitation(tx, citationId);
     const cleared = await tx.citation.updateMany({
-      where: { citationId, settlementStatus: 'pending' },
+      // Only the session we verified may be discarded. If another request
+      // stored a newer session in the meantime, this matches 0 and the caller
+      // fails closed instead of wiping a live payment link.
+      where: { citationId, settlementStatus: 'pending', paymentReference: reference ?? null },
       data: {
         paymentReference: null,
         paymentSessionStatus: 'expired',
@@ -316,7 +323,13 @@ async function createCheckout(req, res, next) {
           expiresAt.getTime() > Date.now()
         ) {
           const persistedSession = await prisma.citation.updateMany({
-            where: { citationId, settlementStatus: 'pending' },
+            // Still the same session? A concurrent store must not be
+            // overwritten with this (older) reference.
+            where: {
+              citationId,
+              settlementStatus: 'pending',
+              paymentReference: sessionReference,
+            },
             data: {
               paymentReference: sessionReference,
               paymentCheckoutUrl: checkoutUrl,
@@ -361,7 +374,7 @@ async function createCheckout(req, res, next) {
         const cleared = await clearStoredSession(citationId, sessionReference);
         if (!cleared) return fail(res, 'This citation is no longer payable', 409);
         citation = await loadCitation(citationId);
-      } else if (session?.status === 'EXPIRED') {
+      } else if (paymentSessions.isTerminalNonPayableStatus(session?.status)) {
         const cleared = await clearStoredSession(citationId, sessionReference);
         if (!cleared) return fail(res, 'This citation is no longer payable', 409);
         citation = await loadCitation(citationId);
@@ -549,6 +562,7 @@ async function createCheckout(req, res, next) {
       resumed: false,
       amount,
       violationIds: legacyRequest ? [] : requestedIds,
+      legacy: legacyRequest,
     }, 'Payment session created');
   } catch (err) {
     next(err);
@@ -663,7 +677,7 @@ async function cancelCheckout(req, res, next) {
             return fail(res, 'Unable to cancel the payment session. Please try again.', 503);
           }
         }
-      } else if (session.status !== 'EXPIRED') {
+      } else if (!paymentSessions.isTerminalNonPayableStatus(session.status)) {
         return fail(res, 'Unable to verify the payment session. Please try again.', 503);
       }
     }

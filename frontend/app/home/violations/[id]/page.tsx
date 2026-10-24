@@ -218,27 +218,38 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
     return pinned.length > 0 ? pinned : unpaidRowIds;
   }, [activeCheckout, unpaidRowIds]);
 
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  /**
+   * The driver's explicit violation selection. `null` is the default state —
+   * every unpaid violation is ticked until the driver says otherwise. While an
+   * open checkout session exists the effective selection is the session's
+   * pinned rows instead (`legacy` sessions pin everything unpaid), so there is
+   * no effect needed to keep it in sync: loading/cancelling a session simply
+   * changes which derivation is displayed.
+   */
+  const [selectedIds, setSelectedIds] = useState<number[] | null>(null);
 
-  // Default/effective selection: the locked set while a session exists,
-  // otherwise every unpaid violation (resets when the receipt reloads and the
-  // scope changes, e.g. after a partial payment clears the session).
-  useEffect(() => {
-    setSelectedIds(lockedIds ?? unpaidRowIds);
-  }, [lockedIds, unpaidRowIds, citation?.citationId]);
+  const effectiveSelectedIds = useMemo(() => {
+    if (lockedIds) return lockedIds;
+    const unpaid = new Set(unpaidRowIds);
+    if (selectedIds === null) return unpaidRowIds;
+    // Drop stale ids after a partial payment settles a previously selected row.
+    return selectedIds.filter((violationId) => unpaid.has(violationId));
+  }, [lockedIds, selectedIds, unpaidRowIds]);
 
   function toggleViolation(violationId: number) {
     if (lockedIds || isPaying || isCancelPending) return;
-    setSelectedIds((prev) =>
-      prev.includes(violationId)
-        ? prev.filter((value) => value !== violationId)
-        : [...prev, violationId]
-    );
+    setSelectedIds((prev) => {
+      const unpaid = new Set(unpaidRowIds);
+      const base = new Set((prev ?? unpaidRowIds).filter((id) => unpaid.has(id)));
+      if (base.has(violationId)) base.delete(violationId);
+      else base.add(violationId);
+      return [...base];
+    });
   }
 
   function handleSelectAll() {
     if (lockedIds || isPaying || isCancelPending) return;
-    setSelectedIds(unpaidRowIds);
+    setSelectedIds(null);
   }
 
   function handleClearSelection() {
@@ -248,7 +259,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
 
   /** Total fine covered by the ticked rows. */
   const selectedAmount = useMemo(() => {
-    const selected = new Set(selectedIds);
+    const selected = new Set(effectiveSelectedIds);
     return rows.reduce(
       (sum, row) =>
         !row.paid && row.violationId != null && selected.has(row.violationId)
@@ -256,7 +267,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
           : sum,
       0
     );
-  }, [rows, selectedIds]);
+  }, [rows, effectiveSelectedIds]);
 
   useEffect(() => {
     // Deferred rather than run in the effect body: the token only exists in the
@@ -397,7 +408,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
   async function handlePayNow() {
     if (payingRef.current || isPaying) return;
 
-    const selection = lockedIds ? lockedIds : selectedIds;
+    const selection = lockedIds ? lockedIds : effectiveSelectedIds;
     const violationIds = selection.length > 0 ? selection : undefined;
 
     // The cached link is only a fallback for a server/network failure. Every
@@ -612,7 +623,7 @@ export default function ViolationDetailPage({ params }: ViolationDetailPageProps
               citation={citation}
               rows={rows}
               checkout={activeCheckout}
-              selectedIds={selectedIds}
+              selectedIds={effectiveSelectedIds}
               selectedAmount={selectedAmount}
               isPaying={isPaying}
               isCancelPending={isCancelPending}
